@@ -67,7 +67,7 @@ jobs:
         run: ditto -c -k --keepParent dist-sea/iris dist-sea/iris-macos-arm64.zip
 
       - name: Create GitHub Release with binary
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist-sea/iris-macos-arm64.zip
           generate_release_notes: true
