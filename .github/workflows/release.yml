@@ -4,6 +4,9 @@ on:
   push:
     tags: ['v*.*.*']
 
+permissions:
+  contents: write # create GitHub Releases and upload assets
+
 jobs:
   # Publish the npm package (public). Verifies tag == package.json version.
   npm:
