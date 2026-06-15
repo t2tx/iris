@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+jobs:
+  # Publish the npm package (public). Verifies tag == package.json version.
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check tag matches package.json version
+        run: test "${GITHUB_REF_NAME}" = "v$(node -p "require('./package.json').version")"
+      - run: pnpm build
+      - run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Build, sign, notarize the macOS arm64 binary and attach it to the Release.
+  # macOS runners are free on GitHub — this is what GitLab.com could not do.
+  macos-binary:
+    runs-on: macos-14 # arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN=build.keychain
+          security create-keychain -p "" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          echo "$MACOS_CERT_P12" | base64 --decode > cert.p12
+          security import cert.p12 -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN"
+          rm -f cert.p12
+
+      - name: Build, sign, notarize
+        env:
+          IRIS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          IRIS_NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
+          IRIS_NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IRIS_NOTARY_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: pnpm build:sea:signed
+
+      - name: Package binary
+        run: ditto -c -k --keepParent dist-sea/iris dist-sea/iris-macos-arm64.zip
+
+      - name: Create GitHub Release with binary
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-sea/iris-macos-arm64.zip
+          generate_release_notes: true

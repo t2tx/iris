@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.log
+.DS_Store
+.pnpm-store/
+lcov.info
+coverage/
+iris.config.toml
+dist-sea/
