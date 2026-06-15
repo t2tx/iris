@@ -17,7 +17,7 @@ import {
   mkdirSync,
   readFileSync,
 } from 'node:fs';
-import {execSync} from 'node:child_process';
+import {execFileSync} from 'node:child_process';
 import {homedir} from 'node:os';
 import {createRequire} from 'node:module';
 import {defaultConfigPath} from './config.js';
@@ -165,13 +165,13 @@ function install() {
 
   // Load the service
   try {
-    execSync(`launchctl bootout gui/${uid()} ${PLIST_PATH} 2>/dev/null`, {
+    execFileSync('launchctl', ['bootout', `gui/${uid()}`, PLIST_PATH], {
       stdio: 'ignore',
     });
   } catch {
     /* not loaded yet — fine */
   }
-  execSync(`launchctl bootstrap gui/${uid()} ${PLIST_PATH}`);
+  execFileSync('launchctl', ['bootstrap', `gui/${uid()}`, PLIST_PATH]);
   console.log(`Service loaded: ${LABEL}`);
   console.log(`Logs: ${LOG_DIR}/`);
   console.log('\nIris is now running and will start automatically on login.');
@@ -182,7 +182,7 @@ function uninstall() {
     console.log('Iris is not installed (no plist found).');
   } else {
     try {
-      execSync(`launchctl bootout gui/${uid()} ${PLIST_PATH}`);
+      execFileSync('launchctl', ['bootout', `gui/${uid()}`, PLIST_PATH]);
       console.log(`Service unloaded: ${LABEL}`);
     } catch {
       console.log('Service was not running.');
@@ -202,9 +202,13 @@ function status() {
   }
 
   try {
-    const output = execSync(`launchctl print gui/${uid()}/${LABEL} 2>&1`, {
-      encoding: 'utf8',
-    });
+    // launchctl print emits service details on stdout; if the service is not
+    // loaded it exits non-zero and we fall through to the catch below.
+    const output = execFileSync(
+      'launchctl',
+      ['print', `gui/${uid()}/${LABEL}`],
+      {encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']},
+    );
     // Extract key info
     const stateMatch = output.match(/state = (.+)/);
     const pidMatch = output.match(/pid = (\d+)/);
@@ -235,13 +239,19 @@ function status() {
 function killAllIrisProcesses() {
   const myPid = process.pid;
   try {
-    const output = execSync(
-      `ps -eo pid,command | grep "iris/dist/cli\\.js\\|iris/dist/index\\.js" | grep -v grep`,
-      {encoding: 'utf8'},
-    );
+    // Enumerate processes without a shell, then match in JS (replaces the
+    // former `ps | grep` pipeline — no shell, no injection surface).
+    const output = execFileSync('ps', ['-eo', 'pid=,command='], {
+      encoding: 'utf8',
+    });
     const pids = output
       .trim()
       .split('\n')
+      .filter(
+        (line) =>
+          /iris\/dist\/cli\.js|iris\/dist\/index\.js/.test(line) &&
+          !line.includes('grep'),
+      )
       .map((line) => parseInt(line.trim(), 10))
       .filter((pid) => !isNaN(pid) && pid !== myPid);
     if (pids.length > 0) {
@@ -255,8 +265,9 @@ function killAllIrisProcesses() {
       console.log(
         `Killed ${pids.length} existing Iris process(es): ${pids.join(', ')}`,
       );
-      // Wait for processes to exit and release Socket Mode connections
-      execSync('sleep 3');
+      // Wait for processes to exit and release Socket Mode connections.
+      // Synchronous sleep without spawning a shell.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000);
     }
   } catch {
     /* no matching processes — fine */
