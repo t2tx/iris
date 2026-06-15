@@ -1,0 +1,52 @@
+# CodeRabbit configuration
+# Docs: https://docs.coderabbit.ai/reference/configuration
+# Public repo なので Pro 機能が無料で使える。
+# 役割分担: CodeQL=セキュリティ静的解析 / Dependabot=依存更新 / CodeRabbit=PR の自然言語レビュー。
+# $schema: https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+reviews:
+  profile: chill
+  # PR を要約する walkthrough を残す
+  high_level_summary: true
+  # 1 行サマリ(リリースノート向け)
+  collapse_walkthrough: false
+  # 既存の lint/typecheck/test は CI でやるので CodeRabbit には設計・バグ・可読性に集中させる
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    # Draft PR はレビューしない (Ready 化で発火)
+    drafts: false
+    base_branches:
+      - main
+  # CodeRabbit に走らせる追加チェック。CI と重複しすぎないよう必要なものだけ。
+  tools:
+    # TypeScript/JS の静的解析。CI の eslint と補完関係(CodeRabbit 側は設定不要で動く)
+    eslint:
+      enabled: true
+    # シェルスクリプト(scripts/*.sh, build-sea 系)の lint
+    shellcheck:
+      enabled: true
+    # GitHub Actions ワークフローの検査
+    actionlint:
+      enabled: true
+    # Markdown(README/docs) の lint
+    markdownlint:
+      enabled: true
+  path_instructions:
+    - path: "src/**/*.ts"
+      instructions: >-
+        This is a thin bridge between Slack (Bolt, Socket Mode) and the Claude
+        Code CLI (stream-json over a child process). There is intentionally NO
+        AI/inference logic here — all intelligence lives in the Claude Code CLI.
+        Flag any added inference, hidden control flow, or unnecessary
+        abstraction. Keep an eye on child-process handling, permission bridging
+        (Block Kit allow/deny), and session mapping (Slack thread_ts ⇄ Claude
+        session_id). Security-sensitive: never log tokens or file contents.
+    - path: "scripts/**/*.sh"
+      instructions: >-
+        These build/sign the macOS SEA binary. Watch for shell injection from
+        environment variables and ensure secrets are passed via env, never
+        hard-coded.
+chat:
+  auto_reply: true
