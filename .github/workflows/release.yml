@@ -13,7 +13,7 @@ jobs:
       - uses: pnpm/action-setup@v6
         with:
           version: 10.15.1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22.18.0'
           registry-url: 'https://registry.npmjs.org'
@@ -35,7 +35,7 @@ jobs:
       - uses: pnpm/action-setup@v6
         with:
           version: 10.15.1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22.18.0'
           cache: pnpm
