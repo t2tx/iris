@@ -39,14 +39,21 @@ Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ claude.ts 
 
 **方法 A: スタンドアロンバイナリ（推奨・Node 不要）**
 
-[Releases](https://github.com/t2tx/iris/releases) から最新版の `iris` バイナリ
-（macOS arm64）をダウンロードして配置するだけです。Node も npm も不要、Apple の
-署名・公証済みなので Gatekeeper の警告も出ません。
+[Releases](https://github.com/t2tx/iris/releases) からお使いのプラットフォーム用バイナリをダウンロードして配置するだけです。
+
+| プラットフォーム | アセット | 備考 |
+|---|---|---|
+| macOS arm64 | `iris-macos-arm64.zip` | Apple 署名・公証済み |
+| Linux x86_64 | `iris-linux-x64.tar.gz` | |
+| Linux arm64 | `iris-linux-arm64.tar.gz` | AWS Graviton, Raspberry Pi 等 |
 
 ```bash
-# 例: ダウンロードした iris を PATH の通った場所へ
-chmod +x iris
-mv iris /usr/local/bin/iris
+# macOS の例
+unzip iris-macos-arm64.zip && mv iris /usr/local/bin/iris
+
+# Linux の例
+tar xzf iris-linux-x64.tar.gz && mv iris /usr/local/bin/iris
+
 iris --help
 ```
 

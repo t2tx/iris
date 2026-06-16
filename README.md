@@ -70,13 +70,22 @@ Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ claude.ts 
 
 **Option A — standalone binary (recommended, no Node required)**
 
-Download the latest `iris` binary (macOS arm64) from
-[Releases](https://github.com/t2tx/iris/releases). It is Apple-signed and
-notarized, so Gatekeeper allows it without warnings.
+Download the latest binary for your platform from
+[Releases](https://github.com/t2tx/iris/releases):
+
+| Platform | Asset | Notes |
+|----------|-------|-------|
+| macOS arm64 | `iris-macos-arm64.zip` | Apple-signed and notarized |
+| Linux x86_64 | `iris-linux-x64.tar.gz` | |
+| Linux arm64 | `iris-linux-arm64.tar.gz` | AWS Graviton, Raspberry Pi, etc. |
 
 ```bash
-chmod +x iris
-mv iris /usr/local/bin/iris
+# macOS example
+unzip iris-macos-arm64.zip && mv iris /usr/local/bin/iris
+
+# Linux example
+tar xzf iris-linux-x64.tar.gz && mv iris /usr/local/bin/iris
+
 iris --help
 ```
 
