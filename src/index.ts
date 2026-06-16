@@ -208,6 +208,7 @@ async function tryCommand(
     manager,
     allManagers: managers,
     projectName: project.name,
+    baseWorkDir: project.workDir,
   });
   if (!result) return false;
   log.debug(`command: ${prompt.trim()} → responding`);

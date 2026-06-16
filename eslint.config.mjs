@@ -42,9 +42,11 @@ export default tseslint.config(
   },
   {
     // node:test's top-level test() calls are fire-and-forget by design.
+    // Test suites also naturally exceed function-length limits.
     files: ['**/*.test.ts'],
     rules: {
       '@typescript-eslint/no-floating-promises': 'off',
+      'max-lines-per-function': 'off',
     },
   },
 );

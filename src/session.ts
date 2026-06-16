@@ -46,9 +46,30 @@ export interface ThreadHandlers {
 export class SessionManager {
   private readonly cfg: SessionConfig;
   private readonly entries = new Map<string, Entry>();
+  private readonly workDirOverrides = new Map<string, string>();
 
   constructor(cfg: SessionConfig) {
     this.cfg = cfg;
+  }
+
+  /** Override the working directory for a specific session (thread). */
+  setWorkDirOverride(sessionKey: string, workDir: string): void {
+    this.workDirOverrides.set(sessionKey, workDir);
+  }
+
+  /** Clear the working directory override, reverting to the default. */
+  clearWorkDirOverride(sessionKey: string): void {
+    this.workDirOverrides.delete(sessionKey);
+  }
+
+  /** Get the current working directory override (if any). */
+  getWorkDirOverride(sessionKey: string): string | undefined {
+    return this.workDirOverrides.get(sessionKey);
+  }
+
+  /** Get the effective working directory for a session. */
+  getEffectiveWorkDir(sessionKey: string): string {
+    return this.workDirOverrides.get(sessionKey) ?? this.cfg.workDir;
   }
 
   /** Get the live process for a thread, spawning (or resuming) as needed. */
@@ -57,10 +78,11 @@ export class SessionManager {
     if (existing && existing.proc.isAlive()) return existing.proc;
 
     const resume = existing?.sessionId || undefined;
+    const workDir = this.workDirOverrides.get(threadTs) ?? this.cfg.workDir;
     const proc = new ClaudeProcess(
       {
         bin: this.cfg.bin,
-        workDir: this.cfg.workDir,
+        workDir,
         model: this.cfg.model,
         appendSystemPrompt: this.cfg.appendSystemPrompt,
         resume,
