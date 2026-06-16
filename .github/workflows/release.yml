@@ -5,7 +5,7 @@ on:
     tags: ['v*.*.*']
 
 permissions:
-  contents: write # create GitHub Releases and upload assets
+  contents: read
 
 jobs:
   # Publish the npm package (public). Verifies tag == package.json version.
@@ -121,7 +121,7 @@ jobs:
 
   # Download all platform binaries and create a single GitHub Release.
   release:
-    needs: [macos-binary, linux-binary, linux-arm64-binary]
+    needs: [npm, macos-binary, linux-binary, linux-arm64-binary]
     runs-on: ubuntu-latest
     permissions:
       contents: write
