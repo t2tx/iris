@@ -5,6 +5,8 @@
  * Returns the response text, or null if the message is not a command.
  */
 
+import {readdirSync} from 'node:fs';
+import {join, basename} from 'node:path';
 import type {SessionManager} from './session.js';
 
 export interface CommandContext {
@@ -12,11 +14,24 @@ export interface CommandContext {
   manager: SessionManager;
   allManagers: Map<string, SessionManager>;
   projectName: string;
+  baseWorkDir: string;
 }
 
 export interface CommandResult {
   text: string;
 }
+
+type CommandHandler = (arg: string, ctx: CommandContext) => CommandResult;
+
+const COMMANDS: Record<string, CommandHandler> = {
+  help: () => cmdHelp(),
+  status: (_a, ctx) => cmdStatus(ctx),
+  sessions: (_a, ctx) => cmdSessions(ctx),
+  restart: (_a, ctx) => cmdRestart(ctx),
+  clear: (_a, ctx) => cmdClear(ctx),
+  new: (_a, ctx) => cmdClear(ctx),
+  switch: (arg, ctx) => cmdSwitch(arg, ctx),
+};
 
 /**
  * Try to handle a slash command. Returns null if the message is not a command.
@@ -30,30 +45,22 @@ export function handleCommand(
   // native slash command interception. The trim() above strips that space.
   if (!trimmed.startsWith('/')) return null;
 
-  const [raw] = trimmed.split(/\s+/, 1) as [string];
+  const spaceIdx = trimmed.indexOf(' ');
+  const raw = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
+  const arg = spaceIdx === -1 ? '' : trimmed.slice(spaceIdx + 1).trim();
   const name = raw.slice(1).toLowerCase();
-  switch (name) {
-    case 'help':
-      return cmdHelp();
-    case 'status':
-      return cmdStatus(ctx);
-    case 'sessions':
-      return cmdSessions(ctx);
-    case 'restart':
-      return cmdRestart(ctx);
-    case 'clear':
-    case 'new':
-      return cmdClear(ctx);
-    default:
-      // A bare "/word" (single token, no spaces) that matches no command is
-      // almost certainly a typo — report it instead of forwarding to Claude.
-      // Anything with spaces (e.g. "/path/to/file を説明して") is treated as a
-      // normal prompt and passed through.
-      if (raw === trimmed) {
-        return {text: `_Unknown command: \`${raw}\`. Try \`/help\`._`};
-      }
-      return null; // pass through to Claude
+
+  const handler = COMMANDS[name];
+  if (handler) return handler(arg, ctx);
+
+  // A bare "/word" (single token, no spaces) that matches no command is
+  // almost certainly a typo — report it instead of forwarding to Claude.
+  // Anything with spaces (e.g. "/path/to/file を説明して") is treated as a
+  // normal prompt and passed through.
+  if (raw === trimmed) {
+    return {text: `_Unknown command: \`${raw}\`. Try \`/help\`._`};
   }
+  return null; // pass through to Claude
 }
 
 function cmdHelp(): CommandResult {
@@ -65,6 +72,9 @@ function cmdHelp(): CommandResult {
       '`/sessions` — All active sessions',
       '`/restart` — Restart the Claude process, keeping the conversation (resume)',
       '`/clear` — Reset the conversation (new session, no history; alias `/new`)',
+      '`/switch <name>` — Switch working directory (searches under base work_dir)',
+      '`/switch` — Show current working directory',
+      '`/switch -` — Revert to default working directory',
     ].join('\n'),
   };
 }
@@ -118,5 +128,110 @@ function cmdClear(ctx: CommandContext): CommandResult {
   ctx.manager.clearSession(ctx.sessionKey);
   return {
     text: ':broom: Conversation cleared. A fresh session starts on your next message.',
+  };
+}
+
+// ── /switch ──────────────────────────────────────────────────────────────
+
+const SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  '.next',
+  'dist',
+  'build',
+  '.pnpm-store',
+  'coverage',
+  '.cache',
+  '.turbo',
+]);
+
+/**
+ * Search for directories under `baseDir` whose name contains `query`
+ * (case-insensitive). Searches up to `maxDepth` levels deep.
+ */
+export function findDirectories(
+  baseDir: string,
+  query: string,
+  maxDepth: number = 3,
+): string[] {
+  const q = query.toLowerCase();
+  const results: string[] = [];
+
+  function walk(dir: string, depth: number): void {
+    if (depth > maxDepth) return;
+    let entries;
+    try {
+      entries = readdirSync(dir, {withFileTypes: true});
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
+      const full = join(dir, entry.name);
+      if (entry.name.toLowerCase().includes(q)) {
+        results.push(full);
+      }
+      walk(full, depth + 1);
+    }
+  }
+
+  walk(baseDir, 1);
+
+  // Prefer exact basename match over partial
+  const exact = results.filter((r) => basename(r).toLowerCase() === q);
+  return exact.length > 0 ? exact : results;
+}
+
+function cmdSwitch(arg: string, ctx: CommandContext): CommandResult {
+  const current = ctx.manager.getEffectiveWorkDir(ctx.sessionKey);
+
+  // No arg → show current
+  if (!arg) {
+    const isOverridden = ctx.manager.getWorkDirOverride(ctx.sessionKey);
+    return {
+      text:
+        `*Current work dir:* \`${current}\`` +
+        (isOverridden ? ' (switched)' : ' (default)'),
+    };
+  }
+
+  // /switch - → revert to default
+  if (arg === '-') {
+    const hadOverride = ctx.manager.getWorkDirOverride(ctx.sessionKey);
+    if (!hadOverride) {
+      return {text: `_Already at default: \`${ctx.baseWorkDir}\`._`};
+    }
+    ctx.manager.clearWorkDirOverride(ctx.sessionKey);
+    ctx.manager.killSession(ctx.sessionKey);
+    return {
+      text: `:house: Switched back to default: \`${ctx.baseWorkDir}\`. Session resumes on next message.`,
+    };
+  }
+
+  // Search for matching directory
+  const matches = findDirectories(ctx.baseWorkDir, arg);
+  if (matches.length === 0) {
+    return {
+      text: `_No directory matching "${arg}" found under \`${ctx.baseWorkDir}\`._`,
+    };
+  }
+  if (matches.length > 1) {
+    const list = matches.slice(0, 10).map((m) => `• \`${m}\``);
+    if (matches.length > 10) list.push(`_… and ${matches.length - 10} more_`);
+    return {
+      text: `Multiple matches for "${arg}":\n${list.join('\n')}\n_Be more specific._`,
+    };
+  }
+
+  const target = matches[0]!;
+  if (target === current) {
+    return {text: `_Already in \`${target}\`._`};
+  }
+
+  ctx.manager.setWorkDirOverride(ctx.sessionKey, target);
+  ctx.manager.killSession(ctx.sessionKey);
+  return {
+    text: `:arrow_right: Switched to \`${target}\`. Session resumes on next message.`,
   };
 }

@@ -1,7 +1,14 @@
 import {describe, it} from 'node:test';
 import assert from 'node:assert/strict';
-import {handleCommand, type CommandContext} from './commands.js';
+import {
+  handleCommand,
+  findDirectories,
+  type CommandContext,
+} from './commands.js';
 import type {SessionManager} from './session.js';
+import {mkdtempSync, mkdirSync, rmSync} from 'node:fs';
+import {join, basename} from 'node:path';
+import {tmpdir} from 'node:os';
 
 function makeCtx(overrides?: Partial<CommandContext>): CommandContext {
   const mockManager = {
@@ -12,6 +19,10 @@ function makeCtx(overrides?: Partial<CommandContext>): CommandContext {
     ],
     killSession: () => true,
     clearSession: () => true,
+    getEffectiveWorkDir: () => '/mock/work',
+    getWorkDirOverride: () => undefined,
+    setWorkDirOverride: () => {},
+    clearWorkDirOverride: () => {},
   } as unknown as SessionManager;
 
   return {
@@ -19,6 +30,7 @@ function makeCtx(overrides?: Partial<CommandContext>): CommandContext {
     manager: mockManager,
     allManagers: new Map([['work', mockManager]]),
     projectName: 'work',
+    baseWorkDir: '/mock/work',
     ...overrides,
   };
 }
@@ -105,5 +117,159 @@ describe('handleCommand', () => {
   it('commands are case-insensitive', () => {
     assert.ok(handleCommand('/HELP', makeCtx()));
     assert.ok(handleCommand('/Status', makeCtx()));
+  });
+
+  it('/help includes /switch', () => {
+    const result = handleCommand('/help', makeCtx());
+    assert.ok(result);
+    assert.ok(result.text.includes('/switch'));
+  });
+});
+
+describe('/switch command', () => {
+  it('no arg shows current workDir (default)', () => {
+    const result = handleCommand('/switch', makeCtx());
+    assert.ok(result);
+    assert.ok(result.text.includes('/mock/work'));
+    assert.ok(result.text.includes('default'));
+  });
+
+  it('no arg shows (switched) when overridden', () => {
+    const result = handleCommand(
+      '/switch',
+      makeCtx({
+        manager: {
+          ...makeCtx().manager,
+          getEffectiveWorkDir: () => '/mock/work/argus',
+          getWorkDirOverride: () => '/mock/work/argus',
+        } as unknown as SessionManager,
+      }),
+    );
+    assert.ok(result);
+    assert.ok(result.text.includes('switched'));
+  });
+
+  it('/switch - when already at default', () => {
+    const result = handleCommand('/switch -', makeCtx());
+    assert.ok(result);
+    assert.ok(result.text.includes('Already at default'));
+  });
+
+  it('/switch - reverts override and kills session', () => {
+    let cleared = false;
+    let killed = false;
+    const result = handleCommand(
+      '/switch -',
+      makeCtx({
+        manager: {
+          ...makeCtx().manager,
+          getWorkDirOverride: () => '/mock/work/argus',
+          clearWorkDirOverride: () => {
+            cleared = true;
+          },
+          killSession: () => {
+            killed = true;
+            return true;
+          },
+        } as unknown as SessionManager,
+      }),
+    );
+    assert.ok(result);
+    assert.ok(result.text.includes('default'));
+    assert.ok(cleared);
+    assert.ok(killed);
+  });
+
+  it('no match returns not found', () => {
+    const result = handleCommand('/switch nonexistent-xyz', makeCtx());
+    assert.ok(result);
+    assert.ok(result.text.includes('No directory matching'));
+  });
+});
+
+describe('findDirectories', () => {
+  let tmpDir: string;
+
+  // Create a temp directory tree for testing
+  function setup(): void {
+    tmpDir = mkdtempSync(join(tmpdir(), 'iris-test-'));
+    mkdirSync(join(tmpDir, 'mile-code-argus'));
+    mkdirSync(join(tmpDir, 'mile', 'mile-service'), {recursive: true});
+    mkdirSync(join(tmpDir, 'mile', 'mile-mobile'));
+    mkdirSync(join(tmpDir, 'rd', 'iris'), {recursive: true});
+    mkdirSync(join(tmpDir, 'node_modules', 'pkg'), {recursive: true});
+    mkdirSync(join(tmpDir, '.git'));
+  }
+
+  function teardown(): void {
+    rmSync(tmpDir, {recursive: true, force: true});
+  }
+
+  it('finds directory by partial name', () => {
+    setup();
+    try {
+      const results = findDirectories(tmpDir, 'argus');
+      assert.equal(results.length, 1);
+      assert.ok(results[0]!.includes('mile-code-argus'));
+    } finally {
+      teardown();
+    }
+  });
+
+  it('finds nested directory', () => {
+    setup();
+    try {
+      const results = findDirectories(tmpDir, 'mile-service');
+      assert.equal(results.length, 1);
+      assert.ok(results[0]!.includes('mile-service'));
+    } finally {
+      teardown();
+    }
+  });
+
+  it('prefers exact match over partial', () => {
+    setup();
+    try {
+      // "mile" matches "mile" (exact) and "mile-code-argus", "mile-service", "mile-mobile" (partial)
+      const results = findDirectories(tmpDir, 'mile');
+      // Exact match: the "mile" directory itself
+      assert.equal(results.length, 1);
+      assert.equal(basename(results[0]!), 'mile');
+    } finally {
+      teardown();
+    }
+  });
+
+  it('skips node_modules and .git', () => {
+    setup();
+    try {
+      const nm = findDirectories(tmpDir, 'node_modules');
+      assert.equal(nm.length, 0);
+      const git = findDirectories(tmpDir, '.git');
+      assert.equal(git.length, 0);
+    } finally {
+      teardown();
+    }
+  });
+
+  it('returns empty for no match', () => {
+    setup();
+    try {
+      const results = findDirectories(tmpDir, 'nonexistent');
+      assert.equal(results.length, 0);
+    } finally {
+      teardown();
+    }
+  });
+
+  it('case-insensitive search', () => {
+    setup();
+    try {
+      const results = findDirectories(tmpDir, 'ARGUS');
+      assert.equal(results.length, 1);
+      assert.ok(results[0]!.includes('mile-code-argus'));
+    } finally {
+      teardown();
+    }
   });
 });

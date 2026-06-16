@@ -153,7 +153,8 @@ iris status     # launchd の稼働確認（macOS のみ）
 - ストリーミングの逐次更新、使用量フッター（トークン / コスト / 所要時間）
 - ユーザー → AI への画像 / ファイル送信（画像は直接認識、ファイルは読み込み）
 - AI → ユーザーへの生成ファイル送信
-- スラッシュコマンド（`/help` `/status` `/sessions` `/restart` `/clear`）
+- スラッシュコマンド（`/help` `/status` `/sessions` `/restart` `/clear` `/switch`）
+- `/switch <name>` でセッションごとに作業ディレクトリを切り替え（`work_dir` 配下を検索）
 - 複数プロジェクトのルーティング（TOML config）
 
 ## 開発に参加する
