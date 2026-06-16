@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build a single-executable (SEA) binary of Iris — no Node required to run.
-# Supports macOS and Linux.
+# Supports macOS, Linux, and Windows (via Git Bash).
 #
 #   sh scripts/build-sea.sh
 #
@@ -13,8 +13,15 @@ set -e
 OUT_DIR="dist-sea"
 BUNDLE="$OUT_DIR/iris.cjs"
 BLOB="$OUT_DIR/iris.blob"
-BIN="$OUT_DIR/iris"
 OS="$(uname -s)"
+case "$OS" in
+  MINGW*|MSYS*|CYGWIN*) OS="Windows" ;;
+esac
+if [ "$OS" = "Windows" ]; then
+  BIN="$OUT_DIR/iris.exe"
+else
+  BIN="$OUT_DIR/iris"
+fi
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"

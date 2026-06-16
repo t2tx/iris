@@ -78,15 +78,17 @@ Download the latest binary for your platform from
 | macOS arm64 | `iris-macos-arm64.zip` | Apple-signed and notarized |
 | Linux x86_64 | `iris-linux-x64.tar.gz` | |
 | Linux arm64 | `iris-linux-arm64.tar.gz` | AWS Graviton, Raspberry Pi, etc. |
+| Windows x86_64 | `iris-windows-x64.zip` | |
 
 ```bash
-# macOS example
-unzip iris-macos-arm64.zip && mv iris /usr/local/bin/iris
-
-# Linux example
-tar xzf iris-linux-x64.tar.gz && mv iris /usr/local/bin/iris
-
+# macOS / Linux
+tar xzf iris-linux-x64.tar.gz   # or unzip iris-macos-arm64.zip
+mv iris /usr/local/bin/iris
 iris --help
+
+# Windows (PowerShell)
+Expand-Archive iris-windows-x64.zip -DestinationPath .
+.\iris.exe --help
 ```
 
 **Option B — npm**
@@ -132,9 +134,9 @@ Slack app setup walkthrough: [docs/slack-setup.md](./docs/slack-setup.md) (Japan
 ## Run
 
 ```bash
-iris install   # install as a launchd service (auto-start on login)
-iris status
-iris            # or run in the foreground
+iris            # run in the foreground (all platforms)
+iris install    # install as a launchd service — macOS only (auto-start on login)
+iris status     # show launchd service status — macOS only
 ```
 
 ## Security notes

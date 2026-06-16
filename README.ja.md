@@ -46,15 +46,19 @@ Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ claude.ts 
 | macOS arm64 | `iris-macos-arm64.zip` | Apple 署名・公証済み |
 | Linux x86_64 | `iris-linux-x64.tar.gz` | |
 | Linux arm64 | `iris-linux-arm64.tar.gz` | AWS Graviton, Raspberry Pi 等 |
+| Windows x86_64 | `iris-windows-x64.zip` | |
 
 ```bash
-# macOS の例
-unzip iris-macos-arm64.zip && mv iris /usr/local/bin/iris
-
-# Linux の例
-tar xzf iris-linux-x64.tar.gz && mv iris /usr/local/bin/iris
-
+# macOS / Linux
+tar xzf iris-linux-x64.tar.gz   # or unzip iris-macos-arm64.zip
+mv iris /usr/local/bin/iris
 iris --help
+```
+
+```powershell
+# Windows (PowerShell)
+Expand-Archive iris-windows-x64.zip -DestinationPath .
+.\iris.exe --help
 ```
 
 **方法 B: npm（Node 環境がある場合）**
@@ -90,8 +94,9 @@ allow_users = ["U09XXXXXXX"]      # この人の DM に反応
 ### 4. 起動する
 
 ```bash
-iris install   # launchd に常駐登録して起動（~/.iris-slack/config.toml を読む）
-iris status    # 稼働確認
+iris            # フォアグラウンドで起動（全プラットフォーム共通）
+iris install    # launchd に常駐登録して起動（macOS のみ）
+iris status     # launchd の稼働確認（macOS のみ）
 ```
 
 ### 5. Slack で使う
