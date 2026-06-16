@@ -69,8 +69,49 @@ jobs:
       - name: Package binary
         run: ditto -c -k --keepParent dist-sea/iris dist-sea/iris-macos-arm64.zip
 
-      - name: Create GitHub Release with binary
+      - name: Upload macOS binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: iris-macos-arm64
+          path: dist-sea/iris-macos-arm64.zip
+
+  # Build Linux x86_64 binary (no signing needed).
+  linux-binary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.15.1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.18.0'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:sea
+      - name: Package binary
+        run: tar -czf dist-sea/iris-linux-x64.tar.gz -C dist-sea iris
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: iris-linux-x64
+          path: dist-sea/iris-linux-x64.tar.gz
+
+  # Download all platform binaries and create a single GitHub Release.
+  release:
+    needs: [macos-binary, linux-binary]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: dist-sea/iris-macos-arm64.zip
+          files: |
+            artifacts/iris-macos-arm64.zip
+            artifacts/iris-linux-x64.tar.gz
           generate_release_notes: true

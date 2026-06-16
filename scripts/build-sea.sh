@@ -1,11 +1,12 @@
 #!/bin/sh
-# Build a macOS single-executable (SEA) binary of Iris — no Node required to run.
+# Build a single-executable (SEA) binary of Iris — no Node required to run.
+# Supports macOS and Linux.
 #
 #   sh scripts/build-sea.sh
 #
 # Output: dist-sea/iris  (a standalone binary)
 #
-# Steps: esbuild bundle → SEA blob → copy node → inject blob → ad-hoc codesign.
+# Steps: esbuild bundle → SEA blob → copy node → inject blob → codesign (macOS).
 # Requires: Node 20+ (for node:sea), esbuild (devDependency).
 set -e
 
@@ -13,6 +14,7 @@ OUT_DIR="dist-sea"
 BUNDLE="$OUT_DIR/iris.cjs"
 BLOB="$OUT_DIR/iris.blob"
 BIN="$OUT_DIR/iris"
+OS="$(uname -s)"
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
@@ -32,19 +34,27 @@ echo "2/5 generate SEA blob…"
 node --experimental-sea-config sea-config.json
 
 echo "3/5 copy node binary…"
-# Use the real Mach-O binary, not a nodenv/asdf shim (which is a shell script).
+# Use the real binary, not a nodenv/asdf shim (which is a shell script).
 REAL_NODE="$(node -p 'process.execPath')"
 cp "$REAL_NODE" "$BIN"
-# Remove the signature so we can re-sign after injection (macOS requirement).
-codesign --remove-signature "$BIN" 2>/dev/null || true
+# macOS: remove the signature so we can re-sign after injection.
+if [ "$OS" = "Darwin" ]; then
+  codesign --remove-signature "$BIN" 2>/dev/null || true
+fi
 
 echo "4/5 inject blob…"
-npx --yes postject "$BIN" NODE_SEA_BLOB "$BLOB" \
-  --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 \
-  --macho-segment-name NODE_SEA
+POSTJECT_ARGS="$BIN NODE_SEA_BLOB $BLOB --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2"
+if [ "$OS" = "Darwin" ]; then
+  npx --yes postject $POSTJECT_ARGS --macho-segment-name NODE_SEA
+else
+  npx --yes postject $POSTJECT_ARGS
+fi
 
-echo "5/5 ad-hoc codesign…"
-codesign --sign - "$BIN"
+echo "5/5 finalize…"
+if [ "$OS" = "Darwin" ]; then
+  codesign --sign - "$BIN"
+  echo "ad-hoc codesigned (macOS)"
+fi
 
 echo "done → $BIN"
 ls -lh "$BIN" | awk '{print $5, $NF}'
