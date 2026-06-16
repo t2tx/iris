@@ -5,18 +5,18 @@ on:
     tags: ['v*.*.*']
 
 permissions:
-  contents: write # create GitHub Releases and upload assets
+  contents: read
 
 jobs:
   # Publish the npm package (public). Verifies tag == package.json version.
   npm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 10.15.1
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: '22.18.0'
           registry-url: 'https://registry.npmjs.org'
@@ -34,11 +34,11 @@ jobs:
   macos-binary:
     runs-on: macos-14 # arm64
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 10.15.1
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: '22.18.0'
           cache: pnpm
@@ -69,8 +69,72 @@ jobs:
       - name: Package binary
         run: ditto -c -k --keepParent dist-sea/iris dist-sea/iris-macos-arm64.zip
 
-      - name: Create GitHub Release with binary
-        uses: softprops/action-gh-release@v3
+      - name: Upload macOS binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          files: dist-sea/iris-macos-arm64.zip
+          name: iris-macos-arm64
+          path: dist-sea/iris-macos-arm64.zip
+
+  # Build Linux x86_64 binary (no signing needed).
+  linux-binary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: 10.15.1
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '22.18.0'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:sea
+      - name: Package binary
+        run: tar -czf dist-sea/iris-linux-x64.tar.gz -C dist-sea iris
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: iris-linux-x64
+          path: dist-sea/iris-linux-x64.tar.gz
+
+  # Build Linux arm64 binary (no signing needed).
+  linux-arm64-binary:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: 10.15.1
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '22.18.0'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:sea
+      - name: Package binary
+        run: tar -czf dist-sea/iris-linux-arm64.tar.gz -C dist-sea iris
+      - name: Upload Linux arm64 binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: iris-linux-arm64
+          path: dist-sea/iris-linux-arm64.tar.gz
+
+  # Download all platform binaries and create a single GitHub Release.
+  release:
+    needs: [npm, macos-binary, linux-binary, linux-arm64-binary]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
+        with:
+          files: |
+            artifacts/iris-macos-arm64.zip
+            artifacts/iris-linux-x64.tar.gz
+            artifacts/iris-linux-arm64.tar.gz
           generate_release_notes: true
