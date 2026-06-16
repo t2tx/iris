@@ -155,9 +155,9 @@ describe('/switch command', () => {
     assert.ok(result.text.includes('Already at default'));
   });
 
-  it('/switch - reverts override and kills session', () => {
-    let cleared = false;
-    let killed = false;
+  it('/switch - reverts override and clears session (no resume)', () => {
+    let overrideCleared = false;
+    let sessionCleared = false;
     const result = handleCommand(
       '/switch -',
       makeCtx({
@@ -165,10 +165,10 @@ describe('/switch command', () => {
           ...makeCtx().manager,
           getWorkDirOverride: () => '/mock/work/argus',
           clearWorkDirOverride: () => {
-            cleared = true;
+            overrideCleared = true;
           },
-          killSession: () => {
-            killed = true;
+          clearSession: () => {
+            sessionCleared = true;
             return true;
           },
         } as unknown as SessionManager,
@@ -176,8 +176,8 @@ describe('/switch command', () => {
     );
     assert.ok(result);
     assert.ok(result.text.includes('default'));
-    assert.ok(cleared);
-    assert.ok(killed);
+    assert.ok(overrideCleared);
+    assert.ok(sessionCleared);
   });
 
   it('no match returns not found', () => {

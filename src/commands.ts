@@ -203,9 +203,12 @@ function cmdSwitch(arg: string, ctx: CommandContext): CommandResult {
       return {text: `_Already at default: \`${ctx.baseWorkDir}\`._`};
     }
     ctx.manager.clearWorkDirOverride(ctx.sessionKey);
-    ctx.manager.killSession(ctx.sessionKey);
+    // clearSession (not killSession): forget the stored session id too, so the
+    // next message starts fresh in the default dir instead of trying to
+    // --resume a session that belongs to the previous working directory.
+    ctx.manager.clearSession(ctx.sessionKey);
     return {
-      text: `:house: Switched back to default: \`${ctx.baseWorkDir}\`. Session resumes on next message.`,
+      text: `:house: Switched back to default: \`${ctx.baseWorkDir}\`. A fresh session starts on your next message.`,
     };
   }
 
@@ -230,8 +233,11 @@ function cmdSwitch(arg: string, ctx: CommandContext): CommandResult {
   }
 
   ctx.manager.setWorkDirOverride(ctx.sessionKey, target);
-  ctx.manager.killSession(ctx.sessionKey);
+  // clearSession (not killSession): forget the stored session id too. Resuming
+  // a session from the old working directory in the new dir fails (Claude exits
+  // with code 1), so start a fresh session in the new dir instead.
+  ctx.manager.clearSession(ctx.sessionKey);
   return {
-    text: `:arrow_right: Switched to \`${target}\`. Session resumes on next message.`,
+    text: `:arrow_right: Switched to \`${target}\`. A fresh session starts on your next message.`,
   };
 }
