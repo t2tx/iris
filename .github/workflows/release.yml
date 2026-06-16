@@ -97,9 +97,31 @@ jobs:
           name: iris-linux-x64
           path: dist-sea/iris-linux-x64.tar.gz
 
+  # Build Linux arm64 binary (no signing needed).
+  linux-arm64-binary:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.15.1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.18.0'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:sea
+      - name: Package binary
+        run: tar -czf dist-sea/iris-linux-arm64.tar.gz -C dist-sea iris
+      - name: Upload Linux arm64 binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: iris-linux-arm64
+          path: dist-sea/iris-linux-arm64.tar.gz
+
   # Download all platform binaries and create a single GitHub Release.
   release:
-    needs: [macos-binary, linux-binary]
+    needs: [macos-binary, linux-binary, linux-arm64-binary]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -114,4 +136,5 @@ jobs:
           files: |
             artifacts/iris-macos-arm64.zip
             artifacts/iris-linux-x64.tar.gz
+            artifacts/iris-linux-arm64.tar.gz
           generate_release_notes: true
