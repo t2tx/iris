@@ -33,17 +33,54 @@ describe('listClaudeSessions', () => {
     // can safely create it (skip if it would collide — it won't, temp name).
     mkdirSync(proj, {recursive: true});
     try {
+      const u = (content: string): string =>
+        JSON.stringify({type: 'user', message: {content}});
+      const a = (text: string): string =>
+        JSON.stringify({
+          type: 'assistant',
+          message: {content: [{type: 'text', text}]},
+        });
+      // 2 human turns + a tool-result-style replay (starts with <, ignored).
       writeFileSync(
         join(proj, 'aaa.jsonl'),
-        JSON.stringify({
-          type: 'user',
-          message: {content: 'first task here'},
-        }) + '\n',
+        [
+          u('first task here'),
+          a('working on it'),
+          u('<tool_result>noise</tool_result>'),
+          u('second and last task'),
+          a('done'),
+        ].join('\n') + '\n',
       );
       const sessions = listClaudeSessions(fakeWork);
       assert.equal(sessions.length, 1);
       assert.equal(sessions[0]!.id, 'aaa');
       assert.equal(sessions[0]!.firstPrompt, 'first task here');
+      assert.deepEqual(sessions[0]!.recentPrompts, [
+        'first task here',
+        'second and last task',
+      ]);
+      assert.equal(sessions[0]!.turns, 2); // tag-prefixed replay excluded
+    } finally {
+      rmSync(proj, {recursive: true, force: true});
+      rmSync(fakeWork, {recursive: true, force: true});
+    }
+  });
+
+  it('keeps only the last 3 human prompts when there are more', () => {
+    const fakeWork = mkdtempSync(join(tmpdir(), 'iris-work-'));
+    const proj = projectDir(fakeWork);
+    mkdirSync(proj, {recursive: true});
+    try {
+      const u = (content: string): string =>
+        JSON.stringify({type: 'user', message: {content}});
+      writeFileSync(
+        join(proj, 'bbb.jsonl'),
+        [u('t1'), u('t2'), u('t3'), u('t4'), u('t5')].join('\n') + '\n',
+      );
+      const s = listClaudeSessions(fakeWork)[0]!;
+      assert.equal(s.firstPrompt, 't1');
+      assert.deepEqual(s.recentPrompts, ['t3', 't4', 't5']); // last 3 only
+      assert.equal(s.turns, 5);
     } finally {
       rmSync(proj, {recursive: true, force: true});
       rmSync(fakeWork, {recursive: true, force: true});

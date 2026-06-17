@@ -272,8 +272,16 @@ function cmdResume(arg: string, ctx: CommandContext): CommandResult {
     }
     const lines = sessions.map((s) => {
       const when = new Date(s.mtimeMs).toLocaleString();
-      const desc = s.firstPrompt ? `: ${preview(s.firstPrompt)}` : '';
-      return `• \`${s.id}\` (${when})${desc}`;
+      const turns = s.turns ? ` _${s.turns} turns_` : '';
+      const head = s.firstPrompt
+        ? `\n   📌 start: ${preview(s.firstPrompt)}`
+        : '';
+      // Show the last few prompts, skipping any that duplicate the start line.
+      const recent = s.recentPrompts
+        .filter((p) => p !== s.firstPrompt)
+        .map((p) => `\n   🔵 ${preview(p)}`)
+        .join('');
+      return `• \`${s.id}\` (${when})${turns}${head}${recent}`;
     });
     return {
       text: [
