@@ -31,9 +31,7 @@ export function toSlackMrkdwn(md: string): string {
 /** Short, human label for a tool-use progress line. */
 export function toolProgressLine(toolName: string, input: unknown): string {
   const detail = summarizeInput(toolName, input);
-  return detail
-    ? `:hammer_and_wrench: ${toolName} — ${detail}`
-    : `:hammer_and_wrench: ${toolName}`;
+  return detail ? `🛠️ ${toolName} — ${detail}` : `🛠️ ${toolName}`;
 }
 
 function summarizeInput(toolName: string, input: unknown): string {

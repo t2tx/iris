@@ -10,7 +10,7 @@
  */
 
 const UPDATE_INTERVAL_MS = 500;
-const TYPING_INDICATOR = ' :writing_hand:';
+const TYPING_INDICATOR = ' ✍️';
 
 export interface SlackPoster {
   post(text: string): Promise<string>; // returns message ts

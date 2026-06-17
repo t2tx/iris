@@ -8,6 +8,7 @@
 import {readdirSync} from 'node:fs';
 import {join, basename} from 'node:path';
 import type {SessionManager} from './session.js';
+import {listClaudeSessions} from './claude-sessions.js';
 
 export interface CommandContext {
   sessionKey: string;
@@ -31,6 +32,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   clear: (_a, ctx) => cmdClear(ctx),
   new: (_a, ctx) => cmdClear(ctx),
   switch: (arg, ctx) => cmdSwitch(arg, ctx),
+  resume: (arg, ctx) => cmdResume(arg, ctx),
 };
 
 /**
@@ -75,6 +77,8 @@ function cmdHelp(): CommandResult {
       '`/switch <name>` — Switch working directory (searches under base work_dir)',
       '`/switch` — Show current working directory',
       '`/switch -` — Revert to default working directory',
+      '`/resume` — List past Claude sessions (to reconnect after a restart)',
+      '`/resume <id>` — Reconnect this thread to a past session',
     ].join('\n'),
   };
 }
@@ -101,7 +105,7 @@ function cmdSessions(ctx: CommandContext): CommandResult {
     const sessions = manager.listSessions();
     for (const s of sessions) {
       total++;
-      const status = s.alive ? ':green_circle:' : ':red_circle:';
+      const status = s.alive ? '🟢' : '🔴';
       lines.push(
         `${status} \`${s.sessionKey}\` (${projectName}) pid=${s.pid ?? 'n/a'}`,
       );
@@ -118,7 +122,7 @@ function cmdRestart(ctx: CommandContext): CommandResult {
   const killed = ctx.manager.killSession(ctx.sessionKey);
   if (killed) {
     return {
-      text: ':arrows_counterclockwise: Process restarted. The conversation resumes on your next message.',
+      text: '🔄 Process restarted. The conversation resumes on your next message.',
     };
   }
   return {text: '_No active session to restart._'};
@@ -127,7 +131,7 @@ function cmdRestart(ctx: CommandContext): CommandResult {
 function cmdClear(ctx: CommandContext): CommandResult {
   ctx.manager.clearSession(ctx.sessionKey);
   return {
-    text: ':broom: Conversation cleared. A fresh session starts on your next message.',
+    text: '🧹 Conversation cleared. A fresh session starts on your next message.',
   };
 }
 
@@ -208,7 +212,7 @@ function cmdSwitch(arg: string, ctx: CommandContext): CommandResult {
     // --resume a session that belongs to the previous working directory.
     ctx.manager.clearSession(ctx.sessionKey);
     return {
-      text: `:house: Switched back to default: \`${ctx.baseWorkDir}\`. A fresh session starts on your next message.`,
+      text: `🏠 Switched back to default: \`${ctx.baseWorkDir}\`. A fresh session starts on your next message.`,
     };
   }
 
@@ -238,6 +242,58 @@ function cmdSwitch(arg: string, ctx: CommandContext): CommandResult {
   // with code 1), so start a fresh session in the new dir instead.
   ctx.manager.clearSession(ctx.sessionKey);
   return {
-    text: `:arrow_right: Switched to \`${target}\`. A fresh session starts on your next message.`,
+    text: `➡️ Switched to \`${target}\`. A fresh session starts on your next message.`,
+  };
+}
+
+// ── /resume ────────────────────────────────────────────────────────────────
+
+/** Truncate a one-line preview of a prompt for the session list. */
+function preview(text: string, max = 60): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
+}
+
+/**
+ * /resume — reconnect this thread to a past Claude session.
+ *
+ * Iris keeps the thread⇄session mapping in memory, so a restart (e.g. an
+ * update) drops it and the next message starts fresh. Claude's own session
+ * files survive, so /resume lists them and lets the user reattach.
+ */
+function cmdResume(arg: string, ctx: CommandContext): CommandResult {
+  const workDir = ctx.manager.getEffectiveWorkDir(ctx.sessionKey);
+
+  // No arg → list recent sessions for this work dir.
+  if (!arg) {
+    const sessions = listClaudeSessions(workDir);
+    if (sessions.length === 0) {
+      return {text: `_No past Claude sessions found under \`${workDir}\`._`};
+    }
+    const lines = sessions.map((s) => {
+      const when = new Date(s.mtimeMs).toLocaleString();
+      const desc = s.firstPrompt ? `: ${preview(s.firstPrompt)}` : '';
+      return `• \`${s.id}\` (${when})${desc}`;
+    });
+    return {
+      text: [
+        `*Past sessions* under \`${workDir}\`:`,
+        ...lines,
+        '_Reconnect with_ `/resume <id>`.',
+      ].join('\n'),
+    };
+  }
+
+  // /resume <id> → attach this thread to the given session id.
+  const sessions = listClaudeSessions(workDir, 100);
+  const match = sessions.find((s) => s.id === arg || s.id.startsWith(arg));
+  if (!match) {
+    return {
+      text: `_No session matching \`${arg}\` under \`${workDir}\`. Try \`/resume\` to list._`,
+    };
+  }
+  ctx.manager.setResumeId(ctx.sessionKey, match.id);
+  return {
+    text: `🔗 Reconnected to \`${match.id}\`. Your next message continues that conversation.`,
   };
 }

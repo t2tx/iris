@@ -23,6 +23,7 @@ function makeCtx(overrides?: Partial<CommandContext>): CommandContext {
     getWorkDirOverride: () => undefined,
     setWorkDirOverride: () => {},
     clearWorkDirOverride: () => {},
+    setResumeId: () => {},
   } as unknown as SessionManager;
 
   return {
@@ -123,6 +124,26 @@ describe('handleCommand', () => {
     const result = handleCommand('/help', makeCtx());
     assert.ok(result);
     assert.ok(result.text.includes('/switch'));
+  });
+
+  it('/help includes /resume', () => {
+    const result = handleCommand('/help', makeCtx());
+    assert.ok(result);
+    assert.ok(result.text.includes('/resume'));
+  });
+});
+
+describe('/resume command', () => {
+  it('no arg with no sessions reports none found', () => {
+    const result = handleCommand('/resume', makeCtx());
+    assert.ok(result);
+    assert.ok(result.text.includes('No past Claude sessions'));
+  });
+
+  it('unknown id reports no match', () => {
+    const result = handleCommand('/resume nonexistent-id', makeCtx());
+    assert.ok(result);
+    assert.ok(result.text.includes('No session matching'));
   });
 });
 
