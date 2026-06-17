@@ -62,8 +62,9 @@ Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ claude.ts 
 - Streaming incremental updates; usage footer (tokens / cost / duration)
 - Inbound image & file attachments (images seen directly, files read)
 - Outbound generated-file uploads
-- Slash commands (`/help` `/status` `/sessions` `/restart` `/clear` `/switch`)
+- Slash commands (`/help` `/status` `/sessions` `/restart` `/clear` `/switch` `/resume`)
 - `/switch <name>` to change the working directory per session (searches under `work_dir`)
+- `/resume` lists past Claude sessions (with turn count & recent prompts); `/resume <id>` reattaches the thread
 - Multi-project routing via TOML
 - Leveled logging (`log_level`), `iris --version`
 
