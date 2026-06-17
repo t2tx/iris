@@ -193,7 +193,7 @@ function handlersFor(
     onError: async (err) => {
       await flushStream(sessionKey);
       log.error(`turn error [${project.name}] ${sessionKey}: ${err.message}`);
-      await post({text: `:warning: Iris error: ${err.message}`});
+      await post({text: `⚠️ Iris error: ${err.message}`});
     },
   };
 }
@@ -414,9 +414,9 @@ async function handlePermissionClick(
     thread_ts: pending.threadTs,
     text: ok
       ? behavior === 'allow'
-        ? ':white_check_mark: Allowed'
-        : ':x: Denied'
-      : ':warning: Session no longer active — permission could not be delivered',
+        ? '✅ Allowed'
+        : '❌ Denied'
+      : '⚠️ Session no longer active — permission could not be delivered',
   });
 }
 

@@ -47,9 +47,24 @@ export class SessionManager {
   private readonly cfg: SessionConfig;
   private readonly entries = new Map<string, Entry>();
   private readonly workDirOverrides = new Map<string, string>();
+  // Pending --resume target set by /resume, applied on the next spawn.
+  private readonly resumeOverrides = new Map<string, string>();
 
   constructor(cfg: SessionConfig) {
     this.cfg = cfg;
+  }
+
+  /**
+   * Attach this thread to an existing Claude session id on its next message.
+   * Used by /resume to reconnect after Iris restarts (which clears the
+   * in-memory entries). Kills any live process so the next message respawns
+   * with --resume.
+   */
+  setResumeId(sessionKey: string, sessionId: string): void {
+    this.resumeOverrides.set(sessionKey, sessionId);
+    const entry = this.entries.get(sessionKey);
+    if (entry?.proc.isAlive()) entry.proc.close();
+    this.entries.delete(sessionKey);
   }
 
   /** Override the working directory for a specific session (thread). */
@@ -77,7 +92,10 @@ export class SessionManager {
     const existing = this.entries.get(threadTs);
     if (existing && existing.proc.isAlive()) return existing.proc;
 
-    const resume = existing?.sessionId || undefined;
+    // Prefer a live entry's session id; otherwise a pending /resume target.
+    const resume =
+      existing?.sessionId || this.resumeOverrides.get(threadTs) || undefined;
+    this.resumeOverrides.delete(threadTs);
     const workDir = this.workDirOverrides.get(threadTs) ?? this.cfg.workDir;
     const proc = new ClaudeProcess(
       {

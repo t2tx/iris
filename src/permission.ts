@@ -74,7 +74,7 @@ export function permissionBlocks(req: PermissionRequest): Block[] {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `:lock: *Permission request* — Claude wants to use *${req.toolName}*${detail ? `\n\`\`\`${detail}\`\`\`` : ''}`,
+        text: `🔒 *Permission request* — Claude wants to use *${req.toolName}*${detail ? `\n\`\`\`${detail}\`\`\`` : ''}`,
       },
     },
     {
