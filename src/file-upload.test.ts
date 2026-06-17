@@ -1,5 +1,8 @@
 import {describe, it} from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtempSync, writeFileSync, rmSync} from 'node:fs';
+import {join, sep} from 'node:path';
+import {homedir} from 'node:os';
 import {detectFiles} from './file-upload.js';
 
 describe('detectFiles', () => {
@@ -34,5 +37,26 @@ describe('detectFiles', () => {
     const text = '/tmp/a.png and again /tmp/a.png';
     const files = detectFiles(text);
     assert.ok(files.length <= 1);
+  });
+
+  it('expands ~/ to home and detects the real file', () => {
+    // Create a real file under the home directory so existsSync passes,
+    // then reference it via ~/ — Claude often writes paths this way.
+    const dir = mkdtempSync(join(homedir(), '.iris-test-'));
+    try {
+      const filePath = join(dir, 'report.pdf');
+      writeFileSync(filePath, 'x');
+      const rel = filePath
+        .slice(homedir().length + 1)
+        .split(sep)
+        .join('/');
+      const files = detectFiles(`Saved to ~/${rel}`);
+      assert.equal(files.length, 1);
+      assert.equal(files[0]!.name, 'report.pdf');
+      // path is expanded to an absolute path (no leading ~)
+      assert.ok(files[0]!.path.startsWith(homedir()));
+    } finally {
+      rmSync(dir, {recursive: true, force: true});
+    }
   });
 });
