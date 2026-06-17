@@ -44,6 +44,11 @@ const APPEND_SYSTEM_PROMPT = [
   'You are running inside Iris, a bridge to Slack.',
   'Your normal text replies are delivered to the user automatically.',
   'If a turn warrants no user-visible response, end your reply with NO_REPLY on its own line.',
+  // File delivery: Iris scans your reply for local file paths and uploads any
+  // that exist to Slack automatically. So you CAN send files — never tell the
+  // user you cannot. Just write the absolute path (e.g. /Users/you/out.pdf) in
+  // your reply; use an absolute path, not "~/...".
+  'To send a file to the user, write its absolute path (starting with /) in your reply — Iris uploads existing files to Slack automatically. Do not claim you are unable to send files.',
 ].join('\n');
 
 if (!CONFIG_PATH) {
