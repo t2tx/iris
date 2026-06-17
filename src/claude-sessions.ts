@@ -28,6 +28,14 @@ export function projectDir(workDir: string): string {
   return join(homedir(), '.claude', 'projects', encoded);
 }
 
+/**
+ * Replayed/system "user" entries whose text starts with one of these tags is
+ * not a real prompt. We match known tags only — a bare `<` would also drop
+ * legitimate prompts like Slack mentions (`<@U…>`) or `<div> について教えて`.
+ */
+const REPLAY_TAG =
+  /^<(tool_result|task-notification|local-command-caveat|system-reminder|command-name|command-message|command-args)\b/;
+
 /** Extract the text of a user message, or '' if it isn't a plain prompt. */
 function userText(obj: Record<string, unknown>): string {
   if (obj['type'] !== 'user') return '';
@@ -46,8 +54,8 @@ function userText(obj: Record<string, unknown>): string {
       .map((p) => p.text)
       .join(' ');
   text = text.trim();
-  // Skip tool-result / system-ish replays that start with a tag.
-  return text.startsWith('<') ? '' : text;
+  // Skip known replay/system tags only (not every `<`-prefixed prompt).
+  return REPLAY_TAG.test(text) ? '' : text;
 }
 
 interface SessionSummary {
