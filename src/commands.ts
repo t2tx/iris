@@ -19,7 +19,15 @@ export interface CommandContext {
 }
 
 export interface CommandResult {
+  /** Text to post back to Slack directly (ignored when forwardToClaude is set). */
   text: string;
+  /**
+   * When set, the command does not answer by itself — this prompt is forwarded
+   * to the session's Claude process and its reply streams back like a normal
+   * turn. Used by /summary to make Claude summarize the current conversation.
+   * `text` is unused in this case.
+   */
+  forwardToClaude?: string;
 }
 
 type CommandHandler = (arg: string, ctx: CommandContext) => CommandResult;
@@ -33,7 +41,30 @@ const COMMANDS: Record<string, CommandHandler> = {
   new: (_a, ctx) => cmdClear(ctx),
   switch: (arg, ctx) => cmdSwitch(arg, ctx),
   resume: (arg, ctx) => cmdResume(arg, ctx),
+  summary: (arg) => cmdSummary(arg),
 };
+
+/**
+ * Default prompt for a bare `/summary` — a handover-oriented summary of the
+ * current conversation, structured for someone (or a new session) picking up
+ * the work. `/summary <text>` overrides this with the user's own request.
+ */
+const DEFAULT_SUMMARY_PROMPT = [
+  'これまでのこのスレッドの会話を、別の担当者や新しいセッションが作業を',
+  '引き継げるように要約してください。次の見出しで簡潔にまとめてください:',
+  '【目的】何をしようとしているか',
+  '【やったこと】これまでの主な作業・決定',
+  '【現状】今どうなっているか',
+  '【未解決】残っている課題・詰まっている点',
+  '【次の一手】次にやるべきこと',
+].join('\n');
+
+/**
+ * Appended to every /summary prompt so the result is wrapped in a fenced code
+ * block — easy to copy verbatim into another thread / handover note.
+ */
+const SUMMARY_WRAP_INSTRUCTION =
+  '\n\nコピーしやすいよう、要約の本文全体を ``` で囲んだコードブロックとして出力してください。';
 
 /**
  * Try to handle a slash command. Returns null if the message is not a command.
@@ -79,6 +110,8 @@ function cmdHelp(): CommandResult {
       '`/switch -` — Revert to default working directory',
       '`/resume` — List past Claude sessions (to reconnect after a restart)',
       '`/resume <id>` — Reconnect this thread to a past session',
+      '`/summary` — Summarize this conversation for handover',
+      '`/summary <request>` — Summarize with your own instruction',
     ].join('\n'),
   };
 }
@@ -304,4 +337,16 @@ function cmdResume(arg: string, ctx: CommandContext): CommandResult {
   return {
     text: `🔗 Reconnected to \`${match.id}\`. Your next message continues that conversation.`,
   };
+}
+
+/**
+ * /summary — ask Claude to summarize the current conversation (this DM or
+ * thread). With no argument, uses a handover-oriented default prompt; with an
+ * argument, forwards that text verbatim as the prompt. Either way the request
+ * is sent to the session's Claude process and the reply streams back normally.
+ */
+function cmdSummary(arg: string): CommandResult {
+  // text is unused — tryCommand forwards forwardToClaude to Claude instead.
+  const prompt = (arg || DEFAULT_SUMMARY_PROMPT) + SUMMARY_WRAP_INSTRUCTION;
+  return {text: '', forwardToClaude: prompt};
 }

@@ -216,7 +216,21 @@ async function tryCommand(
     baseWorkDir: project.workDir,
   });
   if (!result) return false;
-  log.debug(`command: ${prompt.trim()} → responding`);
+  // Log only the command name, never the full input — a command argument
+  // (e.g. `/summary <free text>`) may contain sensitive user content.
+  const commandName = prompt.trim().split(/\s+/, 1)[0] ?? '/unknown';
+  // Some commands (e.g. /summary) don't answer themselves — they forward a
+  // prompt to Claude and let the reply stream back like a normal turn.
+  if (result.forwardToClaude) {
+    log.debug(`command: ${commandName} → forwarding to Claude`);
+    manager.send(
+      sessionKey,
+      result.forwardToClaude,
+      handlersFor(project, channel, threadTs),
+    );
+    return true;
+  }
+  log.debug(`command: ${commandName} → responding`);
   try {
     await app.client.chat.postMessage({
       channel,
