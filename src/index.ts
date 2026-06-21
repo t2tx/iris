@@ -216,6 +216,17 @@ async function tryCommand(
     baseWorkDir: project.workDir,
   });
   if (!result) return false;
+  // Some commands (e.g. /summary) don't answer themselves — they forward a
+  // prompt to Claude and let the reply stream back like a normal turn.
+  if (result.forwardToClaude) {
+    log.debug(`command: ${prompt.trim()} → forwarding to Claude`);
+    manager.send(
+      sessionKey,
+      result.forwardToClaude,
+      handlersFor(project, channel, threadTs),
+    );
+    return true;
+  }
   log.debug(`command: ${prompt.trim()} → responding`);
   try {
     await app.client.chat.postMessage({

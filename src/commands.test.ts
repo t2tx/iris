@@ -147,6 +147,34 @@ describe('/resume command', () => {
   });
 });
 
+describe('/summary command', () => {
+  it('no arg forwards the default handover prompt to Claude', () => {
+    const result = handleCommand('/summary', makeCtx());
+    assert.ok(result);
+    assert.ok(result.forwardToClaude);
+    // The default prompt is handover-oriented (mentions 引き継ぎ).
+    assert.ok(result.forwardToClaude.includes('引き継'));
+    assert.ok(result.forwardToClaude.includes('【次の一手】'));
+    // And asks for a fenced code block so the result is easy to copy.
+    assert.ok(result.forwardToClaude.includes('```'));
+  });
+
+  it('forwards a custom request, with the code-block wrap appended', () => {
+    const result = handleCommand(
+      '/summary 未解決の問題だけ箇条書きで',
+      makeCtx(),
+    );
+    assert.ok(result);
+    assert.ok(result.forwardToClaude?.startsWith('未解決の問題だけ箇条書きで'));
+    assert.ok(result.forwardToClaude?.includes('```'));
+  });
+
+  it('is listed in /help', () => {
+    const result = handleCommand('/help', makeCtx());
+    assert.ok(result?.text?.includes('/summary'));
+  });
+});
+
 describe('/switch command', () => {
   it('no arg shows current workDir (default)', () => {
     const result = handleCommand('/switch', makeCtx());
