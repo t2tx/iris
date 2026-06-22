@@ -105,6 +105,15 @@ npm install -g @t2tx/iris
 
 ## Configuration (TOML)
 
+Generate a starter config with `iris init`, then fill in your tokens and check it:
+
+```bash
+iris init           # write a commented config (~/.iris-slack/config.toml, mode 0600; never overwrites)
+# → edit it: [slack] tokens + at least one [[projects]]
+iris config check   # validate without starting (prints a per-project summary)
+iris config path    # show which config file is used
+```
+
 All configuration lives in one TOML file, resolved in this order:
 
 1. `IRIS_CONFIG=<path>`

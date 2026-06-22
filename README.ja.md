@@ -72,10 +72,18 @@ npm install -g @t2tx/iris
 
 ### 3. 設定ファイルを作る
 
-設定はすべて 1 つの TOML ファイルです。本番（インストール後）は `~/.iris-slack/config.toml` に置きます。
+設定はすべて 1 つの TOML ファイルです。`iris init` でコメント付きの雛形を生成できます（本番は `~/.iris-slack/config.toml`、権限 600 で作成。既存ファイルは上書きしません）。
+
+```bash
+iris init                 # 雛形を生成（~/.iris-slack/config.toml）
+# → エディタで開いて [slack] のトークンと [[projects]] を埋める
+iris config check         # 起動せずに設定を検証（OK ならプロジェクト一覧を表示）
+iris config path          # いま使われる設定ファイルのパスを表示
+```
+
+埋める中身は次のとおり（トップレベルのキーは `[slack]` / `[[projects]]` より「前」に置くこと）:
 
 ```toml
-# トップレベルのキーは [slack] / [[projects]] より「前」に置くこと
 permission_mode = "manual"    # manual（毎回確認）| acceptEdits | auto
 
 [slack]

@@ -3,10 +3,13 @@
  * cli.ts — Iris CLI entry point.
  *
  * Subcommands:
- *   (none)      Start the Iris bridge (default)
- *   install     Generate a launchd plist and load it
- *   uninstall   Unload and remove the launchd plist
- *   status      Show launchd service status
+ *   (none)        Start the Iris bridge (default)
+ *   init          Write a starter config to ~/.iris-slack/config.toml
+ *   config check  Validate the resolved config without starting
+ *   config path   Print which config file would be used
+ *   install       Generate a launchd plist and load it
+ *   uninstall     Unload and remove the launchd plist
+ *   status        Show launchd service status
  */
 
 import {resolve, dirname} from 'node:path';
@@ -20,7 +23,12 @@ import {
 import {execFileSync} from 'node:child_process';
 import {homedir} from 'node:os';
 import {createRequire} from 'node:module';
-import {defaultConfigPath} from './config.js';
+import {
+  defaultConfigPath,
+  resolveConfigPath,
+  loadConfig,
+  ConfigError,
+} from './config.js';
 
 const LABEL = 'com.t2tx.iris';
 const PLIST_DIR = resolve(homedir(), 'Library/LaunchAgents');
@@ -50,30 +58,30 @@ function uid(): number {
   return id;
 }
 
+// Subcommand dispatch table. Keeping this a map (rather than a big switch)
+// holds main()'s complexity flat as commands are added.
+const COMMANDS: Record<string, () => void> = {
+  init,
+  config: configCmd,
+  install,
+  uninstall,
+  status,
+  start: () => void startBridge(),
+  '--help': help,
+  '-h': help,
+  '--version': version,
+  '-v': version,
+};
+
 function main() {
-  const sub = process.argv[2];
-  switch (sub) {
-    case 'install':
-      return install();
-    case 'uninstall':
-      return uninstall();
-    case 'status':
-      return status();
-    case undefined:
-    case 'start':
-      void startBridge();
-      return;
-    case '--help':
-    case '-h':
-      return help();
-    case '--version':
-    case '-v':
-      return version();
-    default:
-      console.error(`Unknown command: ${sub}\n`);
-      help();
-      process.exit(1);
+  const sub = process.argv[2] ?? 'start';
+  const handler = COMMANDS[sub];
+  if (!handler) {
+    console.error(`Unknown command: ${sub}\n`);
+    help();
+    process.exit(1);
   }
+  handler();
 }
 
 // Build-time version. The SEA build injects this via esbuild --define; when
@@ -107,15 +115,153 @@ Usage: iris [command]
 
 Commands:
   (none), start   Start the bridge (foreground)
+  init            Write a starter config (then fill in your Slack tokens)
+  config check    Validate the resolved config without starting
+  config path     Print which config file would be used
   install         Install as a launchd service (macOS)
   uninstall       Remove the launchd service
   status          Show launchd service status
   --version, -v   Show version
   --help, -h      Show this help
 
-Options for install:
+Options for init / install:
   --config <path>   Path to the TOML config (default: ~/.iris-slack/config.toml)
 `);
+}
+
+/**
+ * Starter config written by `iris init`. Kept in sync with
+ * iris.config.example.toml. Embedded as a string so it also works from the
+ * standalone SEA binary, which does not bundle the example file.
+ */
+const CONFIG_TEMPLATE = `# Iris 設定ファイル（TOML）。
+#
+# 配置場所（このいずれか。上から順に探索される）:
+#   1. 環境変数 IRIS_CONFIG=<path> で指定したパス
+#   2. ./iris.config.toml             … 開発（リポジトリ内）
+#   3. ~/.iris-slack/config.toml      … 本番（インストール後）
+#
+# このファイルはトークンを含みます。他人に読まれないよう保護してください
+# （例: chmod 600）。リポジトリにはコミットしないこと（gitignore 済み）。
+
+# 全プロジェクト共通のデフォルト（各プロジェクトで上書き可）。
+# TOML の仕様上、これらトップレベルのキーは [slack] や [[projects]] などの
+# テーブル見出しより「前」に書く必要があります（後ろに書くとそのテーブルの
+# 中のキーと解釈され、効きません）。
+claude_bin = "claude"          # claude CLI のパス（PATH にあれば claude のままで可）
+permission_mode = "manual"     # manual（毎回確認）| acceptEdits | auto（全自動）
+log_level = "info"             # debug | info | warn | error（既定 info）
+# model = ""                   # 空 = CLI 既定
+
+[slack]
+bot_token = "xoxb-..."        # Bot User OAuth Token
+app_token = "xapp-..."        # App-Level Token（Socket Mode 用、connections:write）
+
+# プロジェクトごとに work_dir・許可リスト・権限モードを割り当てる。
+# 受信メッセージは allow_channels（チャンネル）/ allow_users（DM）で照合され、
+# 最初にマッチしたプロジェクトが使われる。どれにもマッチしなければ無視（default-deny）。
+
+[[projects]]
+name = "default"
+work_dir = "/path/to/your/repo"    # Claude が作業するディレクトリ
+allow_channels = ["C0123ABCDEF"]   # このチャンネルでの @mention / スレッド
+allow_users = ["U09XXXXXXX"]       # このユーザーからの DM
+
+# 例: もう 1 プロジェクト（別ディレクトリ・別権限）を足す場合
+# [[projects]]
+# name = "lab"
+# work_dir = "/path/to/another/repo"
+# allow_users = ["U09XXXXXXX"]
+# permission_mode = "acceptEdits"  # 編集系は自動許可（個別上書き）
+`;
+
+/**
+ * iris init — write a starter config so users don't have to create it by hand.
+ * Never overwrites an existing file. The file is created 0600 (it will hold
+ * Slack tokens). Honors --config / IRIS_CONFIG; defaults to ~/.iris-slack/.
+ */
+function init() {
+  const configPath = resolveConfigArg();
+
+  if (existsSync(configPath)) {
+    console.error(`Config already exists: ${configPath}`);
+    console.error(
+      'Edit it directly, or pass --config <path> to write elsewhere.',
+    );
+    process.exit(1);
+  }
+
+  mkdirSync(dirname(configPath), {recursive: true});
+  writeFileSync(configPath, CONFIG_TEMPLATE, {mode: 0o600});
+  console.log(`Wrote starter config: ${configPath}`);
+  console.log(
+    'Next: open it and fill in your Slack tokens ([slack] bot_token / app_token)\n' +
+      'and at least one [[projects]] (work_dir + allow_channels / allow_users).\n' +
+      'Then run "iris" (foreground) or "iris install" (launchd, macOS).',
+  );
+}
+
+/**
+ * Resolve the config path the way the running bridge would: an explicit
+ * --config wins, otherwise the env/cwd/home search (resolveConfigPath, which
+ * only returns a path that exists). Returns undefined when nothing is found.
+ */
+function resolveConfigForInspect(): string | undefined {
+  const idx = process.argv.indexOf('--config');
+  if (idx !== -1 && process.argv[idx + 1]) {
+    return resolve(process.argv[idx + 1]!);
+  }
+  return resolveConfigPath();
+}
+
+/** iris config <check|path> — inspect config without starting the bridge. */
+function configCmd() {
+  const action = process.argv[3];
+  if (action === 'path') return configPath();
+  if (action === 'check') return configCheck();
+  console.error('Usage: iris config <check|path> [--config <path>]');
+  process.exit(1);
+}
+
+/** Print which config file the bridge would use (or report none found). */
+function configPath() {
+  const path = resolveConfigForInspect();
+  if (!path) {
+    console.error('No config found.');
+    console.error(
+      `Searched: $IRIS_CONFIG, ./iris.config.toml, ${defaultConfigPath()}`,
+    );
+    console.error('Run "iris init" to create one.');
+    process.exit(1);
+  }
+  console.log(path);
+}
+
+/** Validate the resolved config without starting the bridge. */
+function configCheck() {
+  const path = resolveConfigForInspect();
+  if (!path || !existsSync(path)) {
+    console.error(`No config found${path ? `: ${path}` : ''}.`);
+    console.error('Run "iris init" to create one.');
+    process.exit(1);
+  }
+  try {
+    const config = loadConfig({path});
+    console.log(`OK: ${path}`);
+    console.log(`  projects: ${config.projects.length}`);
+    for (const p of config.projects) {
+      console.log(
+        `   • ${p.name} (${p.permissionMode}) workDir=${p.workDir} ` +
+          `channels=${p.allowChannels.length} users=${p.allowUsers.length}`,
+      );
+    }
+  } catch (err) {
+    if (err instanceof ConfigError) {
+      console.error(`Config error in ${path}:\n  ${err.message}`);
+      process.exit(1);
+    }
+    throw err;
+  }
 }
 
 function install() {
