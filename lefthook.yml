@@ -1,10 +1,10 @@
 pre-commit:
   jobs:
     - name: format
-      glob: "*.ts"
+      glob: "**/*.ts"
       run: pnpm prettier --write {staged_files} && git add {staged_files}
     - name: lint
-      glob: "*.ts"
+      glob: "**/*.ts"
       run: pnpm eslint --fix {staged_files} && git add {staged_files}
 
 pre-push:
