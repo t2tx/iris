@@ -183,16 +183,22 @@ allow_users = ["U09XXXXXXX"]       # このユーザーからの DM
 function init() {
   const configPath = resolveConfigArg();
 
-  if (existsSync(configPath)) {
-    console.error(`Config already exists: ${configPath}`);
-    console.error(
-      'Edit it directly, or pass --config <path> to write elsewhere.',
-    );
-    process.exit(1);
-  }
-
   mkdirSync(dirname(configPath), {recursive: true});
-  writeFileSync(configPath, CONFIG_TEMPLATE, {mode: 0o600});
+  // 'wx' = exclusive create: fails atomically if the file already exists, so
+  // the never-overwrite guarantee holds even against a concurrent creator
+  // (no TOCTOU gap between an existsSync check and the write).
+  try {
+    writeFileSync(configPath, CONFIG_TEMPLATE, {mode: 0o600, flag: 'wx'});
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      console.error(`Config already exists: ${configPath}`);
+      console.error(
+        'Edit it directly, or pass --config <path> to write elsewhere.',
+      );
+      process.exit(1);
+    }
+    throw err;
+  }
   console.log(`Wrote starter config: ${configPath}`);
   console.log(
     'Next: open it and fill in your Slack tokens ([slack] bot_token / app_token)\n' +
@@ -208,8 +214,14 @@ function init() {
  */
 function resolveConfigForInspect(): string | undefined {
   const idx = process.argv.indexOf('--config');
-  if (idx !== -1 && process.argv[idx + 1]) {
-    return resolve(process.argv[idx + 1]!);
+  if (idx !== -1) {
+    // --config was given — it must carry a path; don't silently auto-resolve.
+    const val = process.argv[idx + 1];
+    if (!val || val.startsWith('-')) {
+      console.error('--config requires a path argument.');
+      process.exit(1);
+    }
+    return resolve(val);
   }
   return resolveConfigPath();
 }
