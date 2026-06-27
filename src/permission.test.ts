@@ -60,6 +60,30 @@ test('drainSession removes only that session', () => {
   assert.equal(reg.resolve('c')?.requestId, 'c');
 });
 
+test('drainSession with an instanceId drains only that generation', () => {
+  const reg = new PermissionRegistry();
+  // Same session key, two process generations (e.g. old proc + respawn).
+  reg.register('C1', 'T1', req('old'), 'T1', 'work', 1);
+  reg.register('C1', 'T1', req('new'), 'T1', 'work', 2);
+
+  // A delayed exit from the old process must not drop the new one's request.
+  const drained = reg.drainSession('T1', 1);
+  assert.deepEqual(
+    drained.map((d) => d.requestId),
+    ['old'],
+  );
+  assert.equal(reg.has('old'), false);
+  assert.equal(reg.has('new'), true);
+});
+
+test('has reflects registration and is cleared by resolve/drain', () => {
+  const reg = new PermissionRegistry();
+  reg.register('C1', 'T1', req('x'), 'T1', 'work', 1);
+  assert.equal(reg.has('x'), true);
+  reg.resolve('x');
+  assert.equal(reg.has('x'), false);
+});
+
 test('permissionBlocks embeds requestId in both button values', () => {
   const blocks = permissionBlocks(req('r9'));
   const actions = blocks.find((b) => b['type'] === 'actions') as {

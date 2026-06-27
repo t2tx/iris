@@ -27,6 +27,10 @@ export class SeenSet {
   check(id: string | undefined, now: number): boolean {
     if (!id) return true;
     const prev = this.seen.get(id);
+    // Re-insert so this id moves to the newest position in Map order; otherwise
+    // capacity eviction (which drops oldest-inserted first) could evict a
+    // freshly-retried id ahead of colder ones and let the next retry through.
+    if (prev !== undefined) this.seen.delete(id);
     if (prev !== undefined && now - prev < this.ttlMs) {
       // Refresh the timestamp so a burst of retries keeps being rejected.
       this.seen.set(id, now);

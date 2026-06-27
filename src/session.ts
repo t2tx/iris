@@ -44,8 +44,13 @@ export interface ThreadHandlers {
     usage?: UsageInfo,
   ): void | Promise<void>;
   onError(err: Error): void | Promise<void>;
-  /** Fired when the process exits, so callers can drop stale pending state. */
-  onExit?(): void | Promise<void>;
+  /**
+   * Fired when the process exits, so callers can drop stale pending state.
+   * `instanceId` identifies the exiting process — callers should only drain
+   * state tied to that generation, since a newer process may already have
+   * started for the same session by the time a delayed exit event fires.
+   */
+  onExit?(instanceId: number): void | Promise<void>;
 }
 
 export class SessionManager {
@@ -142,7 +147,7 @@ export class SessionManager {
       console.error(
         `[claude:${threadTs}] exited code=${code} signal=${signal}`,
       );
-      void handlers.onExit?.();
+      void handlers.onExit?.(proc.instanceId);
     });
 
     return proc;

@@ -50,3 +50,14 @@ test('size is capped (old entries evicted)', () => {
   // 'd' is still remembered
   assert.equal(s.check('d', 0), false);
 });
+
+test('a refreshed id survives capacity eviction (moved to newest)', () => {
+  const s = new SeenSet(10 * 60 * 1000, 3); // max 3
+  s.check('a', 0);
+  s.check('b', 0);
+  s.check('c', 0);
+  s.check('a', 1); // duplicate hit for 'a' → re-inserted as the newest entry
+  s.check('d', 1); // overflow → evicts the now-oldest, which is 'b' (not 'a')
+  assert.equal(s.check('a', 2), false); // 'a' survived
+  assert.equal(s.check('b', 2), true); // 'b' was evicted → fresh again
+});

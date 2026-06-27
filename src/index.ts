@@ -135,6 +135,42 @@ async function uploadDetected(
   }
 }
 
+/**
+ * Register a permission request and post its allow/deny buttons. Registering
+ * happens before the flush await so that if the process exits mid-flush, the
+ * (instanceId-scoped) onExit drain removes this request and we skip posting a
+ * button nobody can resolve.
+ */
+async function postPermission(
+  req: {requestId: string; toolName: string; input: Record<string, unknown>},
+  instanceId: number,
+  ctx: {
+    sessionKey: string;
+    channel: string;
+    threadTs?: string;
+    project: string;
+  },
+  post: (extra: {
+    text: string;
+    blocks?: ReturnType<typeof permissionBlocks>;
+  }) => unknown,
+): Promise<void> {
+  permissions.register(
+    ctx.channel,
+    ctx.sessionKey,
+    req,
+    ctx.threadTs,
+    ctx.project,
+    instanceId,
+  );
+  await flushStream(ctx.sessionKey);
+  if (!permissions.has(req.requestId)) return; // drained on process exit
+  await post({
+    text: `Permission request: ${req.toolName}`,
+    blocks: permissionBlocks(req),
+  });
+}
+
 function handlersFor(
   project: ProjectConfig,
   channel: string,
@@ -179,21 +215,13 @@ function handlersFor(
       await flushStream(sessionKey);
       await post({text: toolProgressLine(toolName, input)});
     },
-    onPermission: async (req, instanceId) => {
-      await flushStream(sessionKey);
-      permissions.register(
-        channel,
-        sessionKey,
+    onPermission: (req, instanceId) =>
+      postPermission(
         req,
-        threadTs,
-        project.name,
         instanceId,
-      );
-      await post({
-        text: `Permission request: ${req.toolName}`,
-        blocks: permissionBlocks(req),
-      });
-    },
+        {sessionKey, channel, threadTs, project: project.name},
+        post,
+      ),
     onResult: async (_raw, usage) => {
       const fullText = await flushStream(sessionKey);
       if (fullText) await uploadDetected(fullText, channel, threadTs);
@@ -208,10 +236,12 @@ function handlersFor(
       log.error(`turn error [${project.name}] ${sessionKey}: ${err.message}`);
       await post({text: `⚠️ Iris error: ${err.message}`});
     },
-    onExit: () => {
-      // The process died — drop any permission buttons still pending for this
-      // session so a later click can't resolve against a respawned process.
-      const dropped = permissions.drainSession(sessionKey);
+    onExit: (instanceId) => {
+      // The process died — drop permission buttons pending for THIS process
+      // generation so a later click can't resolve against a respawned
+      // process. Scope by instanceId: a delayed exit from an old process must
+      // not drain a newer process's pending requests.
+      const dropped = permissions.drainSession(sessionKey, instanceId);
       if (dropped.length) {
         log.debug(
           `dropped ${dropped.length} pending permission(s) for ${sessionKey} on exit`,
