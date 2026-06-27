@@ -15,7 +15,7 @@ const req = (requestId: string): PermissionRequest => ({
 
 test('register then resolve returns the pending entry once (channel)', () => {
   const reg = new PermissionRegistry();
-  reg.register('C1', 'T1', req('r1'), 'T1', 'work');
+  reg.register('C1', 'T1', req('r1'), 'T1', 'work', 1);
 
   const got = reg.resolve('r1');
   assert.equal(got?.channel, 'C1');
@@ -30,13 +30,14 @@ test('register then resolve returns the pending entry once (channel)', () => {
 
 test('DM registration has no threadTs but a channel-id session key', () => {
   const reg = new PermissionRegistry();
-  reg.register('D1', 'D1', req('r2'), undefined, 'work'); // threadTs omitted
+  reg.register('D1', 'D1', req('r2'), undefined, 'work', 7); // threadTs omitted
 
   const got = reg.resolve('r2');
   assert.equal(got?.channel, 'D1');
   assert.equal(got?.sessionKey, 'D1');
   assert.equal(got?.threadTs, undefined);
   assert.equal(got?.project, 'work');
+  assert.equal(got?.instanceId, 7);
 });
 
 test('resolve of unknown id returns undefined', () => {
@@ -46,9 +47,9 @@ test('resolve of unknown id returns undefined', () => {
 
 test('drainSession removes only that session', () => {
   const reg = new PermissionRegistry();
-  reg.register('C1', 'T1', req('a'), 'T1', 'work');
-  reg.register('C1', 'T1', req('b'), 'T1', 'work');
-  reg.register('C1', 'T2', req('c'), 'T2', 'work');
+  reg.register('C1', 'T1', req('a'), 'T1', 'work', 1);
+  reg.register('C1', 'T1', req('b'), 'T1', 'work', 1);
+  reg.register('C1', 'T2', req('c'), 'T2', 'work', 2);
 
   const drained = reg.drainSession('T1');
   assert.equal(drained.length, 2);

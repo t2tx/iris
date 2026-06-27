@@ -22,6 +22,13 @@ export interface PendingPermission {
   threadTs?: string;
   requestId: string;
   input: Record<string, unknown>;
+  /**
+   * The ClaudeProcess instance that raised this request. A button click is
+   * only honored if the session's live process still has this id — guards
+   * against a stale click landing on a respawned process that happens to
+   * reuse the same request_id.
+   */
+  instanceId: number;
 }
 
 const ACTION_ALLOW = 'iris_perm_allow';
@@ -36,6 +43,7 @@ export class PermissionRegistry {
     req: PermissionRequest,
     threadTs: string | undefined,
     project: string,
+    instanceId: number,
   ): void {
     this.pending.set(req.requestId, {
       project,
@@ -44,6 +52,7 @@ export class PermissionRegistry {
       threadTs,
       requestId: req.requestId,
       input: req.input,
+      instanceId,
     });
   }
 

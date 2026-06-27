@@ -31,16 +31,21 @@ interface Entry {
 export interface ThreadHandlers {
   onText(text: string): void | Promise<void>;
   onToolUse(toolName: string, input: unknown): void | Promise<void>;
-  onPermission(req: {
-    requestId: string;
-    toolName: string;
-    input: Record<string, unknown>;
-  }): void | Promise<void>;
+  onPermission(
+    req: {
+      requestId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    },
+    instanceId: number,
+  ): void | Promise<void>;
   onResult(
     raw: Record<string, unknown>,
     usage?: UsageInfo,
   ): void | Promise<void>;
   onError(err: Error): void | Promise<void>;
+  /** Fired when the process exits, so callers can drop stale pending state. */
+  onExit?(): void | Promise<void>;
 }
 
 export class SessionManager {
@@ -121,7 +126,8 @@ export class SessionManager {
     );
     proc.on(
       'permission',
-      (req: PermissionRequest) => void handlers.onPermission(req),
+      (req: PermissionRequest) =>
+        void handlers.onPermission(req, proc.instanceId),
     );
     proc.on(
       'result',
@@ -136,6 +142,7 @@ export class SessionManager {
       console.error(
         `[claude:${threadTs}] exited code=${code} signal=${signal}`,
       );
+      void handlers.onExit?.();
     });
 
     return proc;
@@ -151,15 +158,28 @@ export class SessionManager {
     this.ensure(threadTs, handlers).send(prompt, attachments);
   }
 
-  /** Forward a permission decision to the thread's process. */
+  /**
+   * Forward a permission decision to the thread's process.
+   *
+   * `expectInstanceId`, when given, must match the live process — this rejects
+   * a stale Slack button click that would otherwise land on a respawned
+   * process (which may reuse the same request_id).
+   */
   respondPermission(
     threadTs: string,
     requestId: string,
     behavior: 'allow' | 'deny',
     input?: Record<string, unknown>,
+    expectInstanceId?: number,
   ): boolean {
     const entry = this.entries.get(threadTs);
     if (!entry || !entry.proc.isAlive()) return false;
+    if (
+      expectInstanceId !== undefined &&
+      entry.proc.instanceId !== expectInstanceId
+    ) {
+      return false; // stale click for a previous process generation
+    }
     entry.proc.respondPermission(requestId, behavior, input);
     return true;
   }
