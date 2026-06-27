@@ -1,6 +1,6 @@
 {
   "name": "@t2tx/iris",
-  "version": "0.1.16",
+  "version": "0.1.18",
   "description": "Slack ⇄ Claude Code bridge (minimal, self-hosted). Socket Mode + Bolt.",
   "type": "module",
   "main": "dist/index.js",
