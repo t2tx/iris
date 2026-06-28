@@ -83,7 +83,7 @@ const app = new App({
   token: config.botToken,
   appToken: config.appToken,
   socketMode: true,
-  logLevel: LogLevel.DEBUG,
+  logLevel: LogLevel.INFO,
 });
 
 // One SessionManager per project (each carries its own work_dir / mode / model).
