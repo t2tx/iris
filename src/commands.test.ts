@@ -66,6 +66,31 @@ describe('handleCommand', () => {
     assert.equal(handleCommand('!help', makeCtx()), null);
   });
 
+  it('/cc:<command> forwards /<command> to Claude', () => {
+    const result = handleCommand('/cc:mycommand', makeCtx());
+    assert.ok(result);
+    assert.equal(result.forwardToClaude, '/mycommand');
+  });
+
+  it('/cc:<command> with args forwards the whole command line', () => {
+    const result = handleCommand('/cc:review src/index.ts', makeCtx());
+    assert.ok(result);
+    assert.equal(result.forwardToClaude, '/review src/index.ts');
+  });
+
+  it('/cc: does not collide with Iris own commands (e.g. /cc:help → Claude)', () => {
+    const result = handleCommand('/cc:help', makeCtx());
+    assert.ok(result);
+    assert.equal(result.forwardToClaude, '/help'); // forwarded, not Iris /help
+  });
+
+  it('bare /cc: shows usage and does not forward', () => {
+    const result = handleCommand('/cc:', makeCtx());
+    assert.ok(result);
+    assert.equal(result.forwardToClaude, undefined);
+    assert.ok(result.text.includes('/cc:'));
+  });
+
   it('leading space + /help works (Slack DM workaround)', () => {
     const result = handleCommand('  /help', makeCtx());
     assert.ok(result);
