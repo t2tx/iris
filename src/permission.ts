@@ -22,6 +22,13 @@ export interface PendingPermission {
   threadTs?: string;
   requestId: string;
   input: Record<string, unknown>;
+  /**
+   * The ClaudeProcess instance that raised this request. A button click is
+   * only honored if the session's live process still has this id — guards
+   * against a stale click landing on a respawned process that happens to
+   * reuse the same request_id.
+   */
+  instanceId: number;
 }
 
 const ACTION_ALLOW = 'iris_perm_allow';
@@ -36,6 +43,7 @@ export class PermissionRegistry {
     req: PermissionRequest,
     threadTs: string | undefined,
     project: string,
+    instanceId: number,
   ): void {
     this.pending.set(req.requestId, {
       project,
@@ -44,6 +52,7 @@ export class PermissionRegistry {
       threadTs,
       requestId: req.requestId,
       input: req.input,
+      instanceId,
     });
   }
 
@@ -53,14 +62,24 @@ export class PermissionRegistry {
     return p;
   }
 
-  /** Drop and return all pending requests for a session (e.g. on process death). */
-  drainSession(sessionKey: string): PendingPermission[] {
+  /** Whether a request is still registered (not yet resolved or drained). */
+  has(requestId: string): boolean {
+    return this.pending.has(requestId);
+  }
+
+  /**
+   * Drop and return pending requests for a session (e.g. on process death).
+   * When `instanceId` is given, only requests raised by that process
+   * generation are drained — so a delayed exit event from an old process
+   * cannot drop permissions belonging to a newer process for the same session.
+   */
+  drainSession(sessionKey: string, instanceId?: number): PendingPermission[] {
     const out: PendingPermission[] = [];
     for (const [id, p] of this.pending) {
-      if (p.sessionKey === sessionKey) {
-        out.push(p);
-        this.pending.delete(id);
-      }
+      if (p.sessionKey !== sessionKey) continue;
+      if (instanceId !== undefined && p.instanceId !== instanceId) continue;
+      out.push(p);
+      this.pending.delete(id);
     }
     return out;
   }

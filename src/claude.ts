@@ -39,12 +39,16 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
  *   "exit"       (code, signal)
  *   "error"      (err: Error)
  */
+let nextInstanceId = 1;
+
 export class ClaudeProcess extends EventEmitter {
   private proc: ChildProcessWithoutNullStreams;
   private alive = false;
   private sessionId = '';
   private readonly mode: PermissionMode;
   private readonly workDir: string;
+  /** Unique per spawned process; used to reject stale permission clicks. */
+  readonly instanceId = nextInstanceId++;
 
   constructor(opts: ClaudeOptions, mode: PermissionMode) {
     super();
