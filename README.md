@@ -62,10 +62,11 @@ Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ claude.ts 
 - Streaming incremental updates; usage footer (tokens / cost / duration)
 - Inbound image & file attachments (images seen directly, files read)
 - Outbound generated-file uploads
-- Slash commands (`/help` `/status` `/sessions` `/restart` `/clear` `/switch` `/resume` `/summary`)
+- Slash commands (`/help` `/status` `/sessions` `/restart` `/clear` `/switch` `/resume` `/summary` `/cc:`)
 - `/switch <name>` to change the working directory per session (searches under `work_dir`)
 - `/resume` lists past Claude sessions (with turn count & recent prompts); `/resume <id>` reattaches the thread
 - `/summary` summarizes the current conversation for handover (output wrapped in a code block); `/summary <request>` uses your own instruction
+- `/cc:<command> [args]` runs Claude Code's own `/<command>` (custom commands / skills are expanded in stream-json mode; built-in interactive commands like `/context` `/compact` are not available headless)
 - Multi-project routing via TOML
 - Leveled logging (`log_level`), `iris --version`
 

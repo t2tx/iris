@@ -69,6 +69,9 @@ const SUMMARY_WRAP_INSTRUCTION =
 /**
  * Try to handle a slash command. Returns null if the message is not a command.
  */
+/** Prefix that forwards a Claude Code slash command through to Claude. */
+const CC_PREFIX = '/cc:';
+
 export function handleCommand(
   message: string,
   ctx: CommandContext,
@@ -77,6 +80,21 @@ export function handleCommand(
   // In Slack DMs, users must prepend a space before "/" to bypass Slack's
   // native slash command interception. The trim() above strips that space.
   if (!trimmed.startsWith('/')) return null;
+
+  // `/cc:<rest>` escapes Iris's own command namespace and forwards `/<rest>` to
+  // Claude Code as its slash command (e.g. `/cc:mycommand arg` → Claude runs
+  // `/mycommand arg`). Custom commands and skills are expanded by Claude in
+  // stream-json mode; built-in interactive commands (/context, /compact, …) are
+  // not available headless and will not do anything.
+  if (trimmed.startsWith(CC_PREFIX)) {
+    const rest = trimmed.slice(CC_PREFIX.length).trim();
+    if (!rest) {
+      return {
+        text: `_Usage: \`${CC_PREFIX}<command> [args]\` — runs Claude Code's \`/<command>\` (custom commands / skills only)._`,
+      };
+    }
+    return {forwardToClaude: `/${rest}`, text: ''};
+  }
 
   const spaceIdx = trimmed.indexOf(' ');
   const raw = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
@@ -112,6 +130,7 @@ function cmdHelp(): CommandResult {
       '`/resume <id>` — Reconnect this thread to a past session',
       '`/summary` — Summarize this conversation for handover',
       '`/summary <request>` — Summarize with your own instruction',
+      "`/cc:<command> [args]` — Run Claude Code's `/<command>` (custom commands / skills; built-in interactive commands are not available headless)",
     ].join('\n'),
   };
 }
