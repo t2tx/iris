@@ -1,6 +1,7 @@
 import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {EventEmitter} from 'node:events';
 import {createInterface} from 'node:readline';
+import {randomInt} from 'node:crypto';
 import {parseLine, type PermissionRequest} from './protocol.js';
 import {buildContent, type Attachment} from './attachments.js';
 
@@ -39,7 +40,13 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
  *   "exit"       (code, signal)
  *   "error"      (err: Error)
  */
-let nextInstanceId = 1;
+// Seed the per-process counter from a random boot offset so instanceIds do not
+// repeat across Iris restarts. A plain `1, 2, …` counter resets on restart,
+// which would let a stale Slack permission button (whose action key embeds the
+// old instanceId) collide with a new pending entry if Claude reused the same
+// request_id. The random boot base makes such cross-restart collisions
+// vanishingly unlikely while keeping ids monotonic within a single run.
+let nextInstanceId = randomInt(1, 1_000_000_000);
 
 export class ClaudeProcess extends EventEmitter {
   private proc: ChildProcessWithoutNullStreams;
