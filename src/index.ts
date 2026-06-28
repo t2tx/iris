@@ -16,6 +16,12 @@ import {
 import {StreamBuffer, type SlackPoster} from './stream-buffer.js';
 import {detectFiles, uploadFile} from './file-upload.js';
 import {handleCommand} from './commands.js';
+import {SeenSet} from './dedup.js';
+import {
+  acceptMessage,
+  type InboundMessage,
+  type SlackFile,
+} from './slack/messages.js';
 import type {Attachment} from './attachments.js';
 import {log, setLogLevel} from './log.js';
 import {
@@ -97,6 +103,11 @@ for (const p of config.projects) {
 
 const permissions = new PermissionRegistry();
 
+// Slack delivers events at-least-once (retries when we don't ack within ~3s,
+// and on websocket reconnect). De-duplicate inbound events so the same prompt
+// is never sent to Claude twice. Keyed by Slack's own message/event id.
+const seenEvents = new SeenSet();
+
 /**
  * Build the handlers that route Claude events back to Slack.
  * In a channel, threadTs scopes replies to the thread. In a DM, threadTs is
@@ -126,6 +137,49 @@ async function uploadDetected(
     } catch (err) {
       log.error(`File upload failed: ${file.path}: ${(err as Error).message}`);
     }
+  }
+}
+
+/**
+ * Register a permission request and post its allow/deny buttons. Registering
+ * happens before the flush await so that if the process exits mid-flush, the
+ * (instanceId-scoped) onExit drain removes this request and we skip posting a
+ * button nobody can resolve.
+ */
+async function postPermission(
+  req: {requestId: string; toolName: string; input: Record<string, unknown>},
+  instanceId: number,
+  ctx: {
+    sessionKey: string;
+    channel: string;
+    threadTs?: string;
+    project: string;
+  },
+  post: (extra: {
+    text: string;
+    blocks?: ReturnType<typeof permissionBlocks>;
+  }) => unknown,
+): Promise<void> {
+  const actionKey = permissions.register(
+    ctx.channel,
+    ctx.sessionKey,
+    req,
+    ctx.threadTs,
+    ctx.project,
+    instanceId,
+  );
+  await flushStream(ctx.sessionKey);
+  if (!permissions.has(actionKey)) return; // drained on process exit
+  try {
+    await post({
+      text: `Permission request: ${req.toolName}`,
+      blocks: permissionBlocks(req, actionKey),
+    });
+  } catch (err) {
+    // The buttons never reached Slack — drop the registration so it can't be
+    // resolved by a click that can't exist, and isn't left dangling.
+    permissions.resolve(actionKey);
+    log.error(`Permission post failed: ${(err as Error).message}`);
   }
 }
 
@@ -173,14 +227,13 @@ function handlersFor(
       await flushStream(sessionKey);
       await post({text: toolProgressLine(toolName, input)});
     },
-    onPermission: async (req) => {
-      await flushStream(sessionKey);
-      permissions.register(channel, sessionKey, req, threadTs, project.name);
-      await post({
-        text: `Permission request: ${req.toolName}`,
-        blocks: permissionBlocks(req),
-      });
-    },
+    onPermission: (req, instanceId) =>
+      postPermission(
+        req,
+        instanceId,
+        {sessionKey, channel, threadTs, project: project.name},
+        post,
+      ),
     onResult: async (_raw, usage) => {
       const fullText = await flushStream(sessionKey);
       if (fullText) await uploadDetected(fullText, channel, threadTs);
@@ -194,6 +247,18 @@ function handlersFor(
       await flushStream(sessionKey);
       log.error(`turn error [${project.name}] ${sessionKey}: ${err.message}`);
       await post({text: `⚠️ Iris error: ${err.message}`});
+    },
+    onExit: (instanceId) => {
+      // The process died — drop permission buttons pending for THIS process
+      // generation so a later click can't resolve against a respawned
+      // process. Scope by instanceId: a delayed exit from an old process must
+      // not drain a newer process's pending requests.
+      const dropped = permissions.drainSession(sessionKey, instanceId);
+      if (dropped.length) {
+        log.debug(
+          `dropped ${dropped.length} pending permission(s) for ${sessionKey} on exit`,
+        );
+      }
     },
   };
 }
@@ -246,6 +311,15 @@ async function tryCommand(
 // ── Inbound messages ──────────────────────────────────────────────────────
 // Channel @mention — starts (or continues) a thread-scoped session.
 app.event('app_mention', async ({event}) => {
+  // Drop Slack retries / reconnect re-deliveries of the same mention.
+  const mentionId =
+    (event as {client_msg_id?: string}).client_msg_id ||
+    `mention:${event.channel}:${event.ts}`;
+  if (!seenEvents.check(mentionId, Date.now())) {
+    log.debug(`duplicate mention ignored (${mentionId})`);
+    return;
+  }
+
   const project = routeChannel(config, event.channel, event.user);
   if (!project) {
     log.debug(
@@ -268,22 +342,6 @@ app.event('app_mention', async ({event}) => {
     .get(project.name)
     ?.send(threadTs, prompt, handlersFor(project, event.channel, threadTs));
 });
-
-interface SlackFile {
-  name?: string;
-  mimetype?: string;
-  url_private?: string;
-}
-interface InboundMessage {
-  channel: string;
-  channel_type?: string;
-  thread_ts?: string;
-  ts: string;
-  text?: string;
-  bot_id?: string;
-  user?: string;
-  files?: SlackFile[];
-}
 
 /** Download a Slack message's files using the bot token. */
 async function fetchSlackFiles(
@@ -381,15 +439,9 @@ async function handleChannelMessage(
 
 // Messages: either a DM to the bot, or a follow-up inside a channel thread.
 app.message(async ({message}) => {
-  // Accept plain messages and file uploads; ignore edits/joins/etc.
-  const subtype = (message as {subtype?: string}).subtype;
-  if (subtype !== undefined && subtype !== 'file_share') return;
-  const m = message as InboundMessage;
-  if (m.bot_id) return; // ignore bots (incl. ourselves)
-  const prompt = (m.text || '').trim();
-  // Allow a file-only message (no text) through; otherwise require text.
-  if (!prompt && !m.files?.length) return;
-
+  const accepted = acceptMessage(message, seenEvents, Date.now());
+  if (!accepted) return;
+  const {m, prompt} = accepted;
   if (m.channel_type === 'im') await handleDirectMessage(m, prompt);
   else await handleChannelMessage(m, prompt);
 });
@@ -408,20 +460,19 @@ async function handlePermissionClick(
   body: unknown,
   behavior: 'allow' | 'deny',
 ): Promise<void> {
-  const requestId = extractActionValue(body);
-  if (!requestId) return;
-  const pending = permissions.resolve(requestId);
+  const actionKey = extractActionValue(body);
+  if (!actionKey) return;
+  const pending = permissions.resolve(actionKey);
   if (!pending) return;
 
   const ok =
-    managers
-      .get(pending.project)
-      ?.respondPermission(
-        pending.sessionKey,
-        requestId,
-        behavior,
-        behavior === 'allow' ? pending.input : undefined,
-      ) ?? false;
+    managers.get(pending.project)?.respondPermission(
+      pending.sessionKey,
+      pending.requestId, // the Claude control-request id, not the button key
+      behavior,
+      behavior === 'allow' ? pending.input : undefined,
+      pending.instanceId,
+    ) ?? false;
 
   await app.client.chat.postMessage({
     channel: pending.channel,
