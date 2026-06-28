@@ -160,7 +160,7 @@ async function postPermission(
     blocks?: ReturnType<typeof permissionBlocks>;
   }) => unknown,
 ): Promise<void> {
-  permissions.register(
+  const actionKey = permissions.register(
     ctx.channel,
     ctx.sessionKey,
     req,
@@ -169,11 +169,18 @@ async function postPermission(
     instanceId,
   );
   await flushStream(ctx.sessionKey);
-  if (!permissions.has(req.requestId)) return; // drained on process exit
-  await post({
-    text: `Permission request: ${req.toolName}`,
-    blocks: permissionBlocks(req),
-  });
+  if (!permissions.has(actionKey)) return; // drained on process exit
+  try {
+    await post({
+      text: `Permission request: ${req.toolName}`,
+      blocks: permissionBlocks(req, actionKey),
+    });
+  } catch (err) {
+    // The buttons never reached Slack — drop the registration so it can't be
+    // resolved by a click that can't exist, and isn't left dangling.
+    permissions.resolve(actionKey);
+    log.error(`Permission post failed: ${(err as Error).message}`);
+  }
 }
 
 function handlersFor(
@@ -453,21 +460,19 @@ async function handlePermissionClick(
   body: unknown,
   behavior: 'allow' | 'deny',
 ): Promise<void> {
-  const requestId = extractActionValue(body);
-  if (!requestId) return;
-  const pending = permissions.resolve(requestId);
+  const actionKey = extractActionValue(body);
+  if (!actionKey) return;
+  const pending = permissions.resolve(actionKey);
   if (!pending) return;
 
   const ok =
-    managers
-      .get(pending.project)
-      ?.respondPermission(
-        pending.sessionKey,
-        requestId,
-        behavior,
-        behavior === 'allow' ? pending.input : undefined,
-        pending.instanceId,
-      ) ?? false;
+    managers.get(pending.project)?.respondPermission(
+      pending.sessionKey,
+      pending.requestId, // the Claude control-request id, not the button key
+      behavior,
+      behavior === 'allow' ? pending.input : undefined,
+      pending.instanceId,
+    ) ?? false;
 
   await app.client.chat.postMessage({
     channel: pending.channel,

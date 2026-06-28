@@ -7,10 +7,23 @@ type Block = types.KnownBlock;
  * permission.ts — bridges Claude permission requests (control_request) to
  * Slack Block Kit buttons, and resolves block_actions back to allow/deny.
  *
- * We keep a registry keyed by requestId so a button click can be routed back
- * to the right thread/process. The original tool input is retained so an
- * "allow" can echo it back as updatedInput.
+ * The registry is keyed by an opaque action key (`instanceId:requestId`), not
+ * the requestId alone. Claude can reuse a request_id across process
+ * generations, so keying by requestId would let a stale button (old process)
+ * land on a newer pending entry with the same id. The action key embeds the
+ * process generation, so a stale button simply finds no matching entry. The
+ * key is also the Slack button value; requestId is kept only for the Claude
+ * control response. The original tool input is retained so an "allow" can echo
+ * it back as updatedInput.
  */
+
+/** The opaque registry/button key that ties a click to one process generation. */
+export function permissionActionKey(
+  instanceId: number,
+  requestId: string,
+): string {
+  return `${instanceId}:${requestId}`;
+}
 
 export interface PendingPermission {
   /** Project name, to route the decision back to the right SessionManager. */
@@ -37,6 +50,7 @@ const ACTION_DENY = 'iris_perm_deny';
 export class PermissionRegistry {
   private readonly pending = new Map<string, PendingPermission>();
 
+  /** Register a pending request; returns the opaque action key for its buttons. */
   register(
     channel: string,
     sessionKey: string,
@@ -44,8 +58,9 @@ export class PermissionRegistry {
     threadTs: string | undefined,
     project: string,
     instanceId: number,
-  ): void {
-    this.pending.set(req.requestId, {
+  ): string {
+    const actionKey = permissionActionKey(instanceId, req.requestId);
+    this.pending.set(actionKey, {
       project,
       sessionKey,
       channel,
@@ -54,17 +69,18 @@ export class PermissionRegistry {
       input: req.input,
       instanceId,
     });
+    return actionKey;
   }
 
-  resolve(requestId: string): PendingPermission | undefined {
-    const p = this.pending.get(requestId);
-    if (p) this.pending.delete(requestId);
+  resolve(actionKey: string): PendingPermission | undefined {
+    const p = this.pending.get(actionKey);
+    if (p) this.pending.delete(actionKey);
     return p;
   }
 
   /** Whether a request is still registered (not yet resolved or drained). */
-  has(requestId: string): boolean {
-    return this.pending.has(requestId);
+  has(actionKey: string): boolean {
+    return this.pending.has(actionKey);
   }
 
   /**
@@ -85,8 +101,15 @@ export class PermissionRegistry {
   }
 }
 
-/** Build the Block Kit message asking the user to allow/deny a tool use. */
-export function permissionBlocks(req: PermissionRequest): Block[] {
+/**
+ * Build the Block Kit message asking the user to allow/deny a tool use.
+ * `actionKey` (instanceId:requestId) is the button value so a click resolves
+ * the exact pending entry for this process generation.
+ */
+export function permissionBlocks(
+  req: PermissionRequest,
+  actionKey: string,
+): Block[] {
   const detail = describeInput(req.toolName, req.input);
   return [
     {
@@ -104,14 +127,14 @@ export function permissionBlocks(req: PermissionRequest): Block[] {
           style: 'primary',
           text: {type: 'plain_text', text: '✅ Allow'},
           action_id: ACTION_ALLOW,
-          value: req.requestId,
+          value: actionKey,
         },
         {
           type: 'button',
           style: 'danger',
           text: {type: 'plain_text', text: '❌ Deny'},
           action_id: ACTION_DENY,
-          value: req.requestId,
+          value: actionKey,
         },
       ],
     },
