@@ -59,6 +59,10 @@
   "engines": {
     "node": ">=20"
   },
+  "packageManager": "pnpm@10.15.1",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "lefthook"]
+  },
   "keywords": [
     "slack",
     "claude",
