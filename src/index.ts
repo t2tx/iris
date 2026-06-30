@@ -13,7 +13,11 @@ import {
   toolProgressLine,
   usageFooter,
 } from './format.js';
-import {StreamBuffer, type SlackPoster} from './stream-buffer.js';
+import {
+  StreamBuffer,
+  LONG_REPLY_THRESHOLD,
+  type SlackPoster,
+} from './stream-buffer.js';
 import {
   detectFiles,
   uploadFile,
@@ -113,12 +117,6 @@ const permissions = new PermissionRegistry();
 // is never sent to Claude twice. Keyed by Slack's own message/event id.
 const seenEvents = new SeenSet();
 
-// A reply longer than this gets its full text delivered as a .md file; the
-// streamed Slack message then shows only a short preview (see PREVIEW_MAX in
-// stream-buffer.ts — keep the two in sync). Small so anything beyond a quick
-// answer is read in the file rather than a long, scroll-heavy message.
-const REPLY_FILE_THRESHOLD = 500;
-
 /**
  * Build the handlers that route Claude events back to Slack.
  * In a channel, threadTs scopes replies to the thread. In a DM, threadTs is
@@ -148,9 +146,9 @@ async function deliverLongReply(
   notify: (text: string) => unknown,
 ): Promise<void> {
   log.debug(
-    `reply length=${fullText.length} (threshold ${REPLY_FILE_THRESHOLD})`,
+    `reply length=${fullText.length} (threshold ${LONG_REPLY_THRESHOLD})`,
   );
-  if (fullText.length <= REPLY_FILE_THRESHOLD) return;
+  if (fullText.length <= LONG_REPLY_THRESHOLD) return;
   try {
     const filename = replyFilename(new Date());
     await uploadText(
