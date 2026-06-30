@@ -94,3 +94,43 @@ export async function uploadFile(
   if (threadTs) args['thread_ts'] = threadTs;
   await client.filesUploadV2(args);
 }
+
+/**
+ * Build a timestamped filename for a long reply, e.g. `iris-reply-20260630-2015.md`.
+ * Uses local time so the name matches when the user saw the message. `now` is
+ * injected for testability.
+ */
+export function replyFilename(now: Date): string {
+  const p = (n: number, w = 2): string => String(n).padStart(w, '0');
+  const stamp =
+    `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}` +
+    `-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
+  return `iris-reply-${stamp}.md`;
+}
+
+/**
+ * Upload an in-memory string as a file to a Slack channel/thread. Used for long
+ * replies that would be truncated (or fail with msg_too_long) if posted as a
+ * normal message — sending the full text as a snippet keeps nothing hidden.
+ */
+export async function uploadText(
+  client: {
+    filesUploadV2: (args: Record<string, unknown>) => Promise<unknown>;
+  },
+  text: string,
+  filename: string,
+  channel: string,
+  threadTs?: string,
+): Promise<void> {
+  const args: Record<string, unknown> = {
+    channel_id: channel,
+    // Pass an explicit UTF-8 buffer, not the `content` string: with `content`,
+    // Slack mis-decodes multibyte text (Japanese came back mojibake). A Buffer
+    // is uploaded verbatim and rendered as UTF-8.
+    file: Buffer.from(text, 'utf-8'),
+    filename,
+    title: filename,
+  };
+  if (threadTs) args['thread_ts'] = threadTs;
+  await client.filesUploadV2(args);
+}

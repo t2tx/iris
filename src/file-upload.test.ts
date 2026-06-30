@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtempSync, writeFileSync, rmSync} from 'node:fs';
 import {join, sep} from 'node:path';
 import {homedir} from 'node:os';
-import {detectFiles} from './file-upload.js';
+import {detectFiles, replyFilename} from './file-upload.js';
 
 describe('detectFiles', () => {
   it('detects absolute image paths', () => {
@@ -58,5 +58,19 @@ describe('detectFiles', () => {
     } finally {
       rmSync(dir, {recursive: true, force: true});
     }
+  });
+});
+
+describe('replyFilename', () => {
+  it('builds a timestamped .md filename from local time', () => {
+    // 2026-06-30 20:15:09 local
+    const name = replyFilename(new Date(2026, 5, 30, 20, 15, 9));
+    assert.equal(name, 'iris-reply-20260630-201509.md');
+  });
+
+  it('zero-pads month, day, and time fields', () => {
+    // 2026-01-05 09:03:07 local
+    const name = replyFilename(new Date(2026, 0, 5, 9, 3, 7));
+    assert.equal(name, 'iris-reply-20260105-090307.md');
   });
 });

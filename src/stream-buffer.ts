@@ -11,6 +11,13 @@
 
 const UPDATE_INTERVAL_MS = 500;
 const TYPING_INDICATOR = ' ✍️';
+// When a reply exceeds this, the streamed message shows only a short preview
+// and the full text is delivered separately as a file (see onResult in
+// index.ts). Kept small so the preview is a quick summary, not a wall of text —
+// this must match REPLY_FILE_THRESHOLD in index.ts so every clipped reply also
+// gets its full-text file.
+const PREVIEW_MAX = 500;
+const PREVIEW_NOTICE = '\n\n_…(全文はこのあと添付します)_';
 
 export interface SlackPoster {
   post(text: string): Promise<string>; // returns message ts
@@ -73,7 +80,13 @@ export class StreamBuffer {
     this.flushing = true;
     try {
       const text = this.format(this.buf);
-      const display = showTyping ? text + TYPING_INDICATOR : text;
+      // Clip the streamed preview so a long reply can't exceed Slack's block
+      // limit. The untrimmed text remains available via getFullText().
+      const preview =
+        text.length > PREVIEW_MAX
+          ? text.slice(0, PREVIEW_MAX) + PREVIEW_NOTICE
+          : text;
+      const display = showTyping ? preview + TYPING_INDICATOR : preview;
 
       if (this.messageTs === null) {
         this.messageTs = await this.poster.post(display);
