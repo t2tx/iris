@@ -144,7 +144,8 @@ async function flushStream(sessionKey: string): Promise<string> {
 async function deliverLongReply(
   fullText: string,
   channel: string,
-  threadTs?: string,
+  threadTs: string | undefined,
+  notify: (text: string) => unknown,
 ): Promise<void> {
   log.debug(
     `reply length=${fullText.length} (threshold ${REPLY_FILE_THRESHOLD})`,
@@ -161,7 +162,13 @@ async function deliverLongReply(
     );
     log.debug(`reply file uploaded: ${filename} (${fullText.length} chars)`);
   } catch (err) {
+    // The streamed message is only a clipped preview ending with "全文はこの
+    // あと添付します" — if the file never arrives, tell the user instead of
+    // leaving them with a truncated answer and a false promise.
     log.error(`Reply file upload failed: ${(err as Error).message}`);
+    await notify(
+      '⚠️ 返信が長いため全文をファイルで送ろうとしましたが、添付に失敗しました。もう一度お試しください。',
+    );
   }
 }
 
@@ -277,7 +284,9 @@ function handlersFor(
     onResult: async (_raw, usage) => {
       const fullText = await flushStream(sessionKey);
       if (fullText) await uploadDetected(fullText, channel, threadTs);
-      await deliverLongReply(fullText, channel, threadTs);
+      await deliverLongReply(fullText, channel, threadTs, (text) =>
+        post({text}),
+      );
       if (usage) {
         const footer = usageFooter(usage);
         if (footer) await post({text: footer});
