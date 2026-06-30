@@ -14,7 +14,12 @@ import {
   usageFooter,
 } from './format.js';
 import {StreamBuffer, type SlackPoster} from './stream-buffer.js';
-import {detectFiles, uploadFile} from './file-upload.js';
+import {
+  detectFiles,
+  uploadFile,
+  uploadText,
+  replyFilename,
+} from './file-upload.js';
 import {handleCommand} from './commands.js';
 import {SeenSet} from './dedup.js';
 import {
@@ -108,6 +113,12 @@ const permissions = new PermissionRegistry();
 // is never sent to Claude twice. Keyed by Slack's own message/event id.
 const seenEvents = new SeenSet();
 
+// A reply longer than this gets its full text delivered as a .md file; the
+// streamed Slack message then shows only a short preview (see PREVIEW_MAX in
+// stream-buffer.ts — keep the two in sync). Small so anything beyond a quick
+// answer is read in the file rather than a long, scroll-heavy message.
+const REPLY_FILE_THRESHOLD = 500;
+
 /**
  * Build the handlers that route Claude events back to Slack.
  * In a channel, threadTs scopes replies to the thread. In a DM, threadTs is
@@ -123,6 +134,42 @@ async function flushStream(sessionKey: string): Promise<string> {
   if (!stream) return '';
   await stream.flush();
   return stream.getFullText();
+}
+
+/**
+ * Deliver a long reply as a .md file attachment. The streamed message only
+ * shows a clipped preview (see StreamBuffer), so posting the full text as a
+ * file keeps nothing hidden and avoids Slack's msg_too_long truncation.
+ */
+async function deliverLongReply(
+  fullText: string,
+  channel: string,
+  threadTs: string | undefined,
+  notify: (text: string) => unknown,
+): Promise<void> {
+  log.debug(
+    `reply length=${fullText.length} (threshold ${REPLY_FILE_THRESHOLD})`,
+  );
+  if (fullText.length <= REPLY_FILE_THRESHOLD) return;
+  try {
+    const filename = replyFilename(new Date());
+    await uploadText(
+      app.client as never,
+      fullText,
+      filename,
+      channel,
+      threadTs,
+    );
+    log.debug(`reply file uploaded: ${filename} (${fullText.length} chars)`);
+  } catch (err) {
+    // The streamed message is only a clipped preview ending with "全文はこの
+    // あと添付します" — if the file never arrives, tell the user instead of
+    // leaving them with a truncated answer and a false promise.
+    log.error(`Reply file upload failed: ${(err as Error).message}`);
+    await notify(
+      '⚠️ 返信が長いため全文をファイルで送ろうとしましたが、添付に失敗しました。もう一度お試しください。',
+    );
+  }
 }
 
 /** Upload any file paths detected in the turn's text to the Slack thread. */
@@ -237,6 +284,9 @@ function handlersFor(
     onResult: async (_raw, usage) => {
       const fullText = await flushStream(sessionKey);
       if (fullText) await uploadDetected(fullText, channel, threadTs);
+      await deliverLongReply(fullText, channel, threadTs, (text) =>
+        post({text}),
+      );
       if (usage) {
         const footer = usageFooter(usage);
         if (footer) await post({text: footer});

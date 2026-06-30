@@ -1,6 +1,6 @@
 {
   "name": "@t2tx/iris",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "Slack ⇄ Claude Code bridge (minimal, self-hosted). Socket Mode + Bolt.",
   "type": "module",
   "main": "dist/index.js",
@@ -58,6 +58,10 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "packageManager": "pnpm@10.15.1",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "lefthook"]
   },
   "keywords": [
     "slack",
