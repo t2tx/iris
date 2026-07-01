@@ -53,13 +53,17 @@ test('toolProgressLine: unknown tool with no usable input has no detail', () => 
 });
 
 test('toolProgressLine: unknown/MCP tool surfaces a representative field', () => {
-  // A generic tool: pull a known-ish key…
+  // A generic tool: pull an allowlisted key…
   assert.match(
     toolProgressLine('mcp__foo__bar', {query: 'find widgets'}),
     /mcp__foo__bar — find widgets/,
   );
-  // …or fall back to the first non-empty string value.
-  assert.match(toolProgressLine('Weird', {thing: 'hello'}), /Weird — hello/);
+  // …but a non-allowlisted field is NOT surfaced: it could hold a token or file
+  // contents (MCP schemas are arbitrary), so only the bare tool name shows.
+  assert.equal(
+    toolProgressLine('Weird', {thing: 'hello'}).includes('—'),
+    false,
+  );
 });
 
 test('toolProgressLine: summarizes more built-in tools', () => {

@@ -93,10 +93,10 @@ function genericDetail(obj: Record<string, unknown>): string {
     const v = obj[k];
     if (typeof v === 'string' && v) return v;
   }
-  // Fall back to the first non-empty string value, if any.
-  for (const v of Object.values(obj)) {
-    if (typeof v === 'string' && v) return v;
-  }
+  // No unrestricted fallback: an unknown tool's non-allowlisted fields may hold
+  // tokens or file contents (esp. MCP, whose schemas are arbitrary). Surfacing
+  // them verbatim in the Slack progress line would leak secrets — show only the
+  // bare tool name instead. (See .coderabbit.yaml: never log tokens/contents.)
   return '';
 }
 
