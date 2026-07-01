@@ -2,42 +2,23 @@
  * file-upload.ts — detects local file paths in Claude's text output and
  * uploads them to Slack via files.uploadV2.
  *
- * Heuristic: look for absolute paths (starting with / or ~/) that point to
- * existing files with known extensions (images, PDFs, etc.).
+ * Heuristic: look for absolute paths (starting with / or ~/) that point to an
+ * existing regular file. Any file type is uploaded — source files (.ts, .py, …)
+ * as well as documents/images — so "send me the file" just works. (Earlier this
+ * had an extension allow-list that excluded source code, so Claude would write
+ * a path expecting it to be uploaded, but nothing was attached.)
  */
 
-import {existsSync, readFileSync} from 'node:fs';
-import {basename, extname, join} from 'node:path';
+import {existsSync, readFileSync, statSync} from 'node:fs';
+import {basename, join} from 'node:path';
 import {homedir} from 'node:os';
 
-/** File extensions we'll auto-upload to Slack. */
-const UPLOADABLE_EXTS = new Set([
-  // images
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.gif',
-  '.webp',
-  '.svg',
-  '.bmp',
-  // documents
-  '.pdf',
-  '.csv',
-  '.json',
-  '.txt',
-  '.md',
-  '.html',
-  // archives
-  '.zip',
-  '.tar',
-  '.gz',
-]);
-
 /**
- * Match local file paths in text: absolute (`/...`) or home-relative (`~/...`).
- * Claude often writes the latter, so we accept both and expand `~/` below.
+ * Match local file paths in text: absolute (`/...`) or home-relative (`~/...`),
+ * with or without an extension. Claude often writes the latter, so we accept
+ * both and expand `~/` below.
  */
-const PATH_PATTERN = /(?:^|\s|`)((?:~\/|\/)[\w./-]+\.[\w]+)/gm;
+const PATH_PATTERN = /(?:^|\s|`)((?:~\/|\/)[\w./-]+)/gm;
 
 /** Expand a leading `~/` to the user's home directory. */
 function expandHome(p: string): string {
@@ -50,22 +31,22 @@ export interface DetectedFile {
 }
 
 /**
- * Scan text for local file paths that exist and have uploadable extensions.
- * Returns deduplicated list.
+ * Scan text for local paths that point to an existing regular file. Any file
+ * type is accepted. Returns a deduplicated list. Directories are skipped.
  */
 export function detectFiles(text: string): DetectedFile[] {
   const seen = new Set<string>();
   const results: DetectedFile[] = [];
 
   for (const match of text.matchAll(PATH_PATTERN)) {
-    const raw = match[1]!;
+    // Trim a trailing backtick/punctuation the greedy class may have caught.
+    const raw = match[1]!.replace(/[`.,)]+$/, '');
     const filePath = expandHome(raw);
     if (seen.has(filePath)) continue;
     seen.add(filePath);
 
-    const ext = extname(filePath).toLowerCase();
-    if (!UPLOADABLE_EXTS.has(ext)) continue;
     if (!existsSync(filePath)) continue;
+    if (!statSync(filePath).isFile()) continue; // skip directories
 
     results.push({path: filePath, name: basename(filePath)});
   }

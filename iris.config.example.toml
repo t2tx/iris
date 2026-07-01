@@ -15,6 +15,7 @@
 claude_bin = "claude"          # claude CLI のパス（PATH にあれば claude のままで可）
 permission_mode = "manual"     # manual（毎回確認）| acceptEdits | auto（全自動）
 log_level = "info"             # debug | info | warn | error（既定 info）
+# bash_progress_max = 800      # 進捗表示の Bash コマンドの最大文字数（既定 800、正の整数）
 # model = ""                   # 空 = CLI 既定
 
 [slack]

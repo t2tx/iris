@@ -66,6 +66,8 @@ export interface IrisConfig {
   appToken: string;
   claudeBin: string;
   logLevel: LogLevel;
+  /** Max chars of a Bash command shown in the tool-progress line. */
+  bashProgressMax: number;
   projects: ProjectConfig[];
 }
 
@@ -84,6 +86,7 @@ interface RawConfig {
   model?: unknown;
   permission_mode?: unknown;
   log_level?: unknown;
+  bash_progress_max?: unknown;
   projects?: unknown;
 }
 
@@ -103,8 +106,20 @@ export function loadConfig(opts?: {
   const defaultMode = parseMode(str(raw.permission_mode) || 'manual');
   const defaultModel = str(raw.model) || undefined;
   const logLevel = parseLogLevel(str(raw.log_level) || 'info');
+  const bashProgressMax = parsePositiveInt(raw.bash_progress_max, 800);
   const projects = parseProjects(raw, defaultMode, defaultModel);
-  return {botToken, appToken, claudeBin, logLevel, projects};
+  return {botToken, appToken, claudeBin, logLevel, bashProgressMax, projects};
+}
+
+/** Parse a positive integer from TOML; fall back to `def` if unset/invalid. */
+function parsePositiveInt(v: unknown, def: number): number {
+  if (v === undefined) return def;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v <= 0) {
+    throw new ConfigError(
+      `invalid bash_progress_max ${JSON.stringify(v)} (expected a positive integer)`,
+    );
+  }
+  return v;
 }
 
 function parseLogLevel(v: string): LogLevel {
