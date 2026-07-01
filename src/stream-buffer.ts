@@ -11,15 +11,6 @@
 
 const UPDATE_INTERVAL_MS = 500;
 const TYPING_INDICATOR = ' ✍️';
-// A reply at or below this length is shown in full as a normal Slack message;
-// a longer one is shown as a short preview and its full text is delivered as a
-// file (see deliverLongReply in index.ts). Single source of truth for "long",
-// imported by index.ts, and kept under Slack's ~3000-char block limit.
-export const LONG_REPLY_THRESHOLD = 3000;
-// When a reply IS long, the preview is clipped to this length — a quick summary,
-// not a wall of text. Must be <= LONG_REPLY_THRESHOLD.
-const PREVIEW_MAX = 500;
-const PREVIEW_NOTICE = '\n\n_…(全文はこのあと添付します)_';
 
 export interface SlackPoster {
   post(text: string): Promise<string>; // returns message ts
@@ -49,7 +40,7 @@ export class StreamBuffer {
   async flush(): Promise<void> {
     this.clearTimer();
     if (!this.buf) return;
-    await this.pushToSlack(false, true);
+    await this.pushToSlack(false);
   }
 
   /** Get the full accumulated text (before formatting). */
@@ -66,7 +57,7 @@ export class StreamBuffer {
     if (this.timer !== null) return;
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.pushToSlack(true, false);
+      void this.pushToSlack(true);
     }, UPDATE_INTERVAL_MS);
   }
 
@@ -77,24 +68,12 @@ export class StreamBuffer {
     }
   }
 
-  private async pushToSlack(
-    showTyping: boolean,
-    isFinal: boolean,
-  ): Promise<void> {
+  private async pushToSlack(showTyping: boolean): Promise<void> {
     if (this.flushing) return;
     this.flushing = true;
     try {
       const text = this.format(this.buf);
-      // On the final flush, a reply that fits a message is shown in full; only a
-      // genuinely long one is clipped (its full text is then filed by
-      // deliverLongReply). Mid-stream we always clip: the total length isn't
-      // known yet and an update must stay under Slack's block limit.
-      const clip = isFinal ? text.length > LONG_REPLY_THRESHOLD : true;
-      const body =
-        clip && text.length > PREVIEW_MAX
-          ? text.slice(0, PREVIEW_MAX) + PREVIEW_NOTICE
-          : text;
-      const display = showTyping ? body + TYPING_INDICATOR : body;
+      const display = showTyping ? text + TYPING_INDICATOR : text;
 
       if (this.messageTs === null) {
         this.messageTs = await this.poster.post(display);

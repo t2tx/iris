@@ -20,11 +20,28 @@ describe('detectFiles', () => {
     assert.ok(files.length === 0 || files[0]!.name === 'output.pdf');
   });
 
-  it('ignores non-uploadable extensions', () => {
-    const text = 'I edited /Users/me/src/index.ts';
-    const files = detectFiles(text);
-    // .ts is not in UPLOADABLE_EXTS
-    assert.equal(files.length, 0);
+  it('detects source files regardless of extension (e.g. .ts)', () => {
+    // Any existing regular file is uploadable now, including source code.
+    const dir = mkdtempSync(join(homedir(), '.iris-test-'));
+    try {
+      const filePath = join(dir, 'index.ts');
+      writeFileSync(filePath, 'export const x = 1;');
+      const files = detectFiles(`I edited ${filePath}`);
+      assert.equal(files.length, 1);
+      assert.equal(files[0]!.name, 'index.ts');
+    } finally {
+      rmSync(dir, {recursive: true, force: true});
+    }
+  });
+
+  it('skips directories (only regular files are uploaded)', () => {
+    const dir = mkdtempSync(join(homedir(), '.iris-test-'));
+    try {
+      const files = detectFiles(`the folder ${dir} has your output`);
+      assert.equal(files.length, 0);
+    } finally {
+      rmSync(dir, {recursive: true, force: true});
+    }
   });
 
   it('ignores relative paths', () => {

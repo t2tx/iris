@@ -129,6 +129,31 @@ work_dir = "/w"
   assert.throws(() => loadConfig({path: bad, env: baseEnv}), ConfigError);
 });
 
+test('bash_progress_max: defaults to 800, accepts a positive int, rejects invalid', () => {
+  const base = writeToml(`
+[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+  assert.equal(loadConfig({path: base, env: baseEnv}).bashProgressMax, 800);
+
+  const custom = writeToml(`
+bash_progress_max = 2000
+[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+  assert.equal(loadConfig({path: custom, env: baseEnv}).bashProgressMax, 2000);
+
+  const bad = writeToml(`
+bash_progress_max = 0
+[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+  assert.throws(() => loadConfig({path: bad, env: baseEnv}), ConfigError);
+});
+
 test('TOML: project without work_dir throws', () => {
   const path = writeToml(`
 [[projects]]

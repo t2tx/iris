@@ -48,15 +48,44 @@ test('toolProgressLine: summarizes known tools', () => {
   );
 });
 
-test('toolProgressLine: unknown tool has no detail', () => {
+test('toolProgressLine: unknown tool with no usable input has no detail', () => {
   assert.equal(toolProgressLine('Mystery', {}).includes('—'), false);
 });
 
-test('toolProgressLine: long detail is clipped', () => {
-  const long = 'a'.repeat(300);
-  const line = toolProgressLine('Bash', {command: long});
-  assert.ok(line.length < 200);
+test('toolProgressLine: unknown/MCP tool surfaces a representative field', () => {
+  // A generic tool: pull a known-ish key…
+  assert.match(
+    toolProgressLine('mcp__foo__bar', {query: 'find widgets'}),
+    /mcp__foo__bar — find widgets/,
+  );
+  // …or fall back to the first non-empty string value.
+  assert.match(toolProgressLine('Weird', {thing: 'hello'}), /Weird — hello/);
+});
+
+test('toolProgressLine: summarizes more built-in tools', () => {
+  assert.match(
+    toolProgressLine('Task', {subagent_type: 'Explore', description: 'scan'}),
+    /Task — Explore — scan/,
+  );
+  assert.match(
+    toolProgressLine('WebFetch', {url: 'https://x'}),
+    /WebFetch — https:\/\/x/,
+  );
+  assert.match(
+    toolProgressLine('TodoWrite', {todos: [1, 2, 3]}),
+    /TodoWrite — 3 item\(s\)/,
+  );
+});
+
+test('toolProgressLine: Bash allows long commands, clips only very long ones', () => {
+  // A 300-char command is now shown in full (Bash limit raised).
+  const cmd = 'echo ' + 'x'.repeat(295);
+  assert.ok(!toolProgressLine('Bash', {command: cmd}).endsWith('…'));
+  // But an extreme command is still clipped to keep the line bounded.
+  const huge = 'a'.repeat(2000);
+  const line = toolProgressLine('Bash', {command: huge});
   assert.ok(line.endsWith('…'));
+  assert.ok(line.length < 900);
 });
 
 test('usageFooter: formats token counts and cost', () => {
