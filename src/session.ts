@@ -34,11 +34,19 @@ interface Entry {
   proc: ClaudeProcess;
   sessionId: string; // last known Claude session id (for resume after death)
   lastActivityMs: number; // for idle reaping
+  handlers: ThreadHandlers; // last handlers seen, for out-of-band notices
+  idleClosed: boolean; // set when the reaper closed this session's process
 }
 
 /** Callbacks the manager invokes for a given thread. Wired by index.ts. */
 export interface ThreadHandlers {
   onText(text: string): void | Promise<void>;
+  /**
+   * A standalone status line (not part of a streamed turn) posted to the
+   * thread — e.g. the idle reaper pausing a session, or its transparent resume.
+   * Optional so non-Slack callers can ignore it.
+   */
+  onNotice?(text: string): void | Promise<void>;
   onToolUse(toolName: string, input: unknown): void | Promise<void>;
   onPermission(
     req: {
@@ -98,13 +106,18 @@ export class SessionManager {
     const ttl = this.cfg.idleTtlMs ?? 0;
     if (ttl <= 0) return;
     const cutoff = this.now() - ttl;
+    const mins = Math.round(ttl / 60_000);
     for (const [key, entry] of this.entries) {
       if (!entry.proc.isAlive()) continue;
       if (entry.lastActivityMs <= cutoff) {
-        console.error(
-          `[claude:${key}] reaping idle session (idle > ${Math.round(ttl / 60_000)}m)`,
-        );
+        console.error(`[claude:${key}] reaping idle session (idle > ${mins}m)`);
+        entry.idleClosed = true;
         entry.proc.close();
+        // Visibility: tell the thread its session was paused. The next message
+        // silently resumes it via --resume (see ensure()).
+        void entry.handlers.onNotice?.(
+          `⏸️ 無操作が${mins}分続いたためセッションを一時停止しました。次のメッセージで会話を再開します。`,
+        );
       }
     }
   }
@@ -142,23 +155,22 @@ export class SessionManager {
     return this.workDirOverrides.get(sessionKey) ?? this.cfg.workDir;
   }
 
-  /** Record activity on a thread so the idle reaper leaves it alone. */
-  private touch(threadTs: string): void {
-    const entry = this.entries.get(threadTs);
-    if (entry) entry.lastActivityMs = this.now();
-  }
-
   /** Get the live process for a thread, spawning (or resuming) as needed. */
   private ensure(threadTs: string, handlers: ThreadHandlers): ClaudeProcess {
     const existing = this.entries.get(threadTs);
     if (existing && existing.proc.isAlive()) {
       existing.lastActivityMs = this.now();
+      existing.handlers = handlers; // keep the freshest post target
       return existing.proc;
     }
 
     // Prefer a live entry's session id; otherwise a pending /resume target.
     const resume =
       existing?.sessionId || this.resumeOverrides.get(threadTs) || undefined;
+    // Visibility: if the reaper had paused this session, announce the resume.
+    // Only when we actually have a session id to resume (a real continuation,
+    // not a brand-new conversation).
+    const resumingAfterIdle = existing?.idleClosed === true && Boolean(resume);
     this.resumeOverrides.delete(threadTs);
     const workDir = this.workDirOverrides.get(threadTs) ?? this.cfg.workDir;
     const proc = new ClaudeProcess(
@@ -176,8 +188,14 @@ export class SessionManager {
       proc,
       sessionId: resume ?? '',
       lastActivityMs: this.now(),
+      handlers,
+      idleClosed: false,
     };
     this.entries.set(threadTs, entry);
+
+    if (resumingAfterIdle) {
+      void handlers.onNotice?.('▶️ 一時停止していた会話を再開しました。');
+    }
 
     // Any inbound event counts as activity, so a session that is actively
     // streaming a long turn is never reaped mid-flight.

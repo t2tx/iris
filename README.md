@@ -68,7 +68,7 @@ Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ claude.ts 
 - `/summary` summarizes the current conversation for handover (output wrapped in a code block); `/summary <request>` uses your own instruction
 - `/cc:<command> [args]` runs Claude Code's own `/<command>` (custom commands / skills are expanded in stream-json mode; built-in interactive commands like `/context` `/compact` are not available headless)
 - Multi-project routing via TOML
-- Idle-session reaping: a session's Claude process is closed after `idle_ttl_min` minutes idle (default 24h) to free memory; the next message resumes it via `--resume`, so no conversation is lost
+- Idle-session reaping: a session's Claude process is closed after `idle_ttl_min` minutes idle (default 24h) to free memory; the thread gets a pause notice, and the next message resumes it via `--resume` (with a resume notice), so no conversation is lost
 - Leveled logging (`log_level`), `iris --version`
 
 ## Install

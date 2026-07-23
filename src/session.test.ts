@@ -22,7 +22,13 @@ import {SessionManager, type ThreadHandlers} from './session.js';
 function fakeClaudeBin(): string {
   const dir = mkdtempSync(join(tmpdir(), 'iris-fakeclaude-'));
   const path = join(dir, 'fake-claude.sh');
-  writeFileSync(path, '#!/bin/sh\nexec cat >/dev/null\n');
+  // Emit a `system` init line so SessionManager captures a session id (needed
+  // to exercise the --resume path), then block on stdin to stay alive until
+  // the reaper closes the process group.
+  writeFileSync(
+    path,
+    '#!/bin/sh\nprintf \'{"type":"system","session_id":"sess-fake"}\\n\'\nexec cat >/dev/null\n',
+  );
   chmodSync(path, 0o755);
   return path;
 }
@@ -36,6 +42,20 @@ const noopHandlers: ThreadHandlers = {
   onResult() {},
   onError() {},
 };
+
+/** Handlers that record every onNotice() string, for asserting visibility. */
+function capturingHandlers(): {handlers: ThreadHandlers; notices: string[]} {
+  const notices: string[] = [];
+  return {
+    notices,
+    handlers: {
+      ...noopHandlers,
+      onNotice(text) {
+        notices.push(text);
+      },
+    },
+  };
+}
 
 /** Poll a predicate until true or timeout; returns whether it became true. */
 async function waitFor(
@@ -62,6 +82,11 @@ test('idle reaper closes a session idle longer than idleTtlMs', async () => {
   try {
     mgr.send('thread-1', 'hi', noopHandlers);
     assert.equal(mgr.getSessionInfo('thread-1')?.alive, true);
+    // Let the async session-init line land first; its bump() would otherwise
+    // refresh lastActivityMs to the post-advance clock and defeat the reap.
+    await waitFor(
+      () => mgr.getSessionInfo('thread-1')?.sessionId === 'sess-fake',
+    );
 
     // Advance the injected clock well past the TTL so the next scan reaps it.
     clock += 10_000;
@@ -72,6 +97,47 @@ test('idle reaper closes a session idle longer than idleTtlMs', async () => {
 
     // The entry is kept (session id retained) so the next message can --resume.
     assert.notEqual(mgr.getSessionInfo('thread-1'), null);
+  } finally {
+    mgr.closeAll();
+  }
+});
+
+test('idle reaper notifies the thread on pause and on resume', async () => {
+  let clock = 1_000_000;
+  const {handlers, notices} = capturingHandlers();
+  const mgr = new SessionManager({
+    bin: FAKE_CLAUDE,
+    workDir: process.cwd(),
+    mode: 'auto',
+    idleTtlMs: 500,
+    now: () => clock,
+  });
+  try {
+    mgr.send('thread-1', 'hi', handlers);
+    // Wait until the fake process reports its session id, so the later respawn
+    // has something to --resume (and thus emits the resume notice).
+    await waitFor(
+      () => mgr.getSessionInfo('thread-1')?.sessionId === 'sess-fake',
+    );
+
+    // Reap it, and confirm a pause notice was posted to the thread.
+    clock += 10_000;
+    await waitFor(() => mgr.getSessionInfo('thread-1')?.alive === false);
+    assert.equal(
+      notices.some((n) => n.includes('一時停止')),
+      true,
+      'a pause notice should be posted when the reaper closes the session',
+    );
+
+    // The next message resumes it — and announces the resume exactly once.
+    const before = notices.length;
+    mgr.send('thread-1', 'still there?', handlers);
+    assert.equal(mgr.getSessionInfo('thread-1')?.alive, true);
+    assert.equal(
+      notices.slice(before).some((n) => n.includes('再開')),
+      true,
+      'a resume notice should be posted when the paused session respawns',
+    );
   } finally {
     mgr.closeAll();
   }
