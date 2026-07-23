@@ -39,7 +39,7 @@
     "prepare": "command -v lefthook >/dev/null 2>&1 && lefthook install || true"
   },
   "dependencies": {
-    "@slack/bolt": "^4.2.0",
+    "@slack/bolt": "^5.0.0",
     "smol-toml": "^1.6.1"
   },
   "devDependencies": {
