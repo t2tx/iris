@@ -97,6 +97,7 @@ for (const p of config.projects) {
       model: p.model,
       appendSystemPrompt: APPEND_SYSTEM_PROMPT,
       mode: p.permissionMode,
+      idleTtlMs: config.idleTtlMs,
     }),
   );
 }

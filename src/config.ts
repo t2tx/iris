@@ -68,6 +68,12 @@ export interface IrisConfig {
   logLevel: LogLevel;
   /** Max chars of a Bash command shown in the tool-progress line. */
   bashProgressMax: number;
+  /**
+   * Idle timeout in milliseconds: a session's Claude process is closed after
+   * this long with no activity (its session id is kept, so the next message
+   * resumes it via --resume — no conversation is lost). 0 disables reaping.
+   */
+  idleTtlMs: number;
   projects: ProjectConfig[];
 }
 
@@ -87,6 +93,7 @@ interface RawConfig {
   permission_mode?: unknown;
   log_level?: unknown;
   bash_progress_max?: unknown;
+  idle_ttl_min?: unknown;
   projects?: unknown;
 }
 
@@ -107,8 +114,50 @@ export function loadConfig(opts?: {
   const defaultModel = str(raw.model) || undefined;
   const logLevel = parseLogLevel(str(raw.log_level) || 'info');
   const bashProgressMax = parsePositiveInt(raw.bash_progress_max, 800);
+  const idleTtlMs = resolveIdleTtlMs(env, raw);
   const projects = parseProjects(raw, defaultMode, defaultModel);
-  return {botToken, appToken, claudeBin, logLevel, bashProgressMax, projects};
+  return {
+    botToken,
+    appToken,
+    claudeBin,
+    logLevel,
+    bashProgressMax,
+    idleTtlMs,
+    projects,
+  };
+}
+
+/**
+ * Idle-reaper TTL, in ms. Precedence: IRIS_IDLE_TTL_MIN env → `idle_ttl_min`
+ * TOML → default 24 h. A value of 0 disables reaping. Expressed in minutes
+ * at the boundary (env/TOML) since that's the operator-facing unit.
+ */
+const DEFAULT_IDLE_TTL_MIN = 24 * 60;
+function resolveIdleTtlMs(env: NodeJS.ProcessEnv, raw: RawConfig): number {
+  const fromEnv = env.IRIS_IDLE_TTL_MIN;
+  if (fromEnv !== undefined && fromEnv.trim() !== '') {
+    const n = Number(fromEnv);
+    if (!Number.isInteger(n) || n < 0) {
+      throw new ConfigError(
+        `invalid IRIS_IDLE_TTL_MIN ${JSON.stringify(fromEnv)} (expected a non-negative integer, minutes)`,
+      );
+    }
+    return n * 60_000;
+  }
+  const fromToml = raw.idle_ttl_min;
+  if (fromToml !== undefined) {
+    if (
+      typeof fromToml !== 'number' ||
+      !Number.isInteger(fromToml) ||
+      fromToml < 0
+    ) {
+      throw new ConfigError(
+        `invalid idle_ttl_min ${JSON.stringify(fromToml)} (expected a non-negative integer, minutes)`,
+      );
+    }
+    return fromToml * 60_000;
+  }
+  return DEFAULT_IDLE_TTL_MIN * 60_000;
 }
 
 /** Parse a positive integer from TOML; fall back to `def` if unset/invalid. */

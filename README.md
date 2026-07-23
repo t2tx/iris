@@ -68,6 +68,7 @@ Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ claude.ts 
 - `/summary` summarizes the current conversation for handover (output wrapped in a code block); `/summary <request>` uses your own instruction
 - `/cc:<command> [args]` runs Claude Code's own `/<command>` (custom commands / skills are expanded in stream-json mode; built-in interactive commands like `/context` `/compact` are not available headless)
 - Multi-project routing via TOML
+- Idle-session reaping: a session's Claude process is closed after `idle_ttl_min` minutes idle (default 24h) to free memory; the next message resumes it via `--resume`, so no conversation is lost
 - Leveled logging (`log_level`), `iris --version`
 
 ## Install
@@ -125,6 +126,7 @@ All configuration lives in one TOML file, resolved in this order:
 # Top-level keys must come BEFORE [slack] / [[projects]] table headers.
 permission_mode = "manual"   # manual | acceptEdits | auto
 log_level = "info"           # debug | info | warn | error
+# idle_ttl_min = 1440        # close a session's process after N idle minutes (default 1440 = 24h; 0 disables)
 
 [slack]
 bot_token = "xoxb-..."

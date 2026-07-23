@@ -16,6 +16,7 @@ claude_bin = "claude"          # claude CLI のパス（PATH にあれば claude
 permission_mode = "manual"     # manual（毎回確認）| acceptEdits | auto（全自動）
 log_level = "info"             # debug | info | warn | error（既定 info）
 # bash_progress_max = 800      # 進捗表示の Bash コマンドの最大文字数（既定 800、正の整数）
+# idle_ttl_min = 1440          # 無操作でセッションのプロセスを終了するまでの分数（既定 1440＝24h、0 で無効）
 # model = ""                   # 空 = CLI 既定
 
 [slack]
