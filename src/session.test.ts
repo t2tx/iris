@@ -90,11 +90,14 @@ test('idle reaper leaves an active session alone', async () => {
     mgr.send('thread-1', 'hi', noopHandlers);
 
     // Keep touching the session (via send) as the clock advances, so it never
-    // crosses the idle threshold relative to its last activity.
+    // crosses the idle threshold relative to its last activity. The real-time
+    // sleeps total > 500ms so the reaper's setInterval fires at least once
+    // mid-loop — otherwise the assertion would pass even if activity tracking
+    // (bump/touch) were broken, since no scan would ever run.
     for (let i = 0; i < 5; i++) {
       clock += 200; // less than the 500ms TTL between touches
       mgr.send('thread-1', 'again', noopHandlers);
-      await new Promise((r) => setTimeout(r, 60));
+      await new Promise((r) => setTimeout(r, 150));
     }
     assert.equal(
       mgr.getSessionInfo('thread-1')?.alive,
