@@ -154,6 +154,59 @@ work_dir = "/w"
   assert.throws(() => loadConfig({path: bad, env: baseEnv}), ConfigError);
 });
 
+test('idle_ttl_min: defaults to 24h, TOML sets it, 0 disables', () => {
+  const base = writeToml(`
+[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+  assert.equal(
+    loadConfig({path: base, env: baseEnv}).idleTtlMs,
+    24 * 60 * 60_000,
+  );
+
+  const custom = writeToml(`
+idle_ttl_min = 30
+[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+  assert.equal(loadConfig({path: custom, env: baseEnv}).idleTtlMs, 30 * 60_000);
+
+  const off = writeToml(`
+idle_ttl_min = 0
+[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+  assert.equal(loadConfig({path: off, env: baseEnv}).idleTtlMs, 0);
+
+  const bad = writeToml(`
+idle_ttl_min = -5
+[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+  assert.throws(() => loadConfig({path: bad, env: baseEnv}), ConfigError);
+});
+
+test('IRIS_IDLE_TTL_MIN env overrides TOML idle_ttl_min', () => {
+  const path = writeToml(`
+idle_ttl_min = 30
+[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+  const env = {...baseEnv, IRIS_IDLE_TTL_MIN: '90'};
+  assert.equal(loadConfig({path, env}).idleTtlMs, 90 * 60_000);
+
+  // A non-integer / negative env value is rejected.
+  assert.throws(
+    () => loadConfig({path, env: {...baseEnv, IRIS_IDLE_TTL_MIN: 'x'}}),
+    ConfigError,
+  );
+});
+
 test('TOML: project without work_dir throws', () => {
   const path = writeToml(`
 [[projects]]

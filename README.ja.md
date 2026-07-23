@@ -127,6 +127,7 @@ iris status     # launchd の稼働確認（macOS のみ）
 | `claude_bin` | トップレベル | claude CLI のパス（既定 `claude`） |
 | `permission_mode` | トップレベル / 各 project | `manual` \| `acceptEdits` \| `auto` |
 | `log_level` | トップレベル | `debug` \| `info` \| `warn` \| `error`（既定 `info`） |
+| `idle_ttl_min` | トップレベル | 無操作が続いたセッションのプロセスを終了するまでの分数（既定 `1440`＝24h、`0` で無効）。環境変数 `IRIS_IDLE_TTL_MIN` で上書き可 |
 | `model` | トップレベル / 各 project | `--model` の上書き（省略可） |
 | `work_dir` | 各 `[[projects]]` | Claude の作業ディレクトリ |
 | `allow_channels` | 各 `[[projects]]` | 許可するチャンネル ID。**空 = チャンネル拒否** |
@@ -167,6 +168,7 @@ iris status     # launchd の稼働確認（macOS のみ）
 - `/summary` で現在の会話を引き継ぎ用に要約（コードブロックで出力）、`/summary <要望>` で指示を指定
 - `/cc:<command> [args]` で Claude Code 側の `/<command>` を実行（カスタムコマンド/スキルは stream-json モードで展開される。`/context` `/compact` 等の組み込み対話コマンドは headless では利用不可）
 - 複数プロジェクトのルーティング（TOML config）
+- アイドルセッションの自動終了：無操作が `idle_ttl_min` 分（既定 24h）続いたセッションの Claude プロセスを終了してメモリを解放。次のメッセージで `--resume` により会話を継続するため、文脈は失われない
 
 ## 開発に参加する
 

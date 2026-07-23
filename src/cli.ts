@@ -151,6 +151,7 @@ const CONFIG_TEMPLATE = `# Iris 設定ファイル（TOML）。
 claude_bin = "claude"          # claude CLI のパス（PATH にあれば claude のままで可）
 permission_mode = "manual"     # manual（毎回確認）| acceptEdits | auto（全自動）
 log_level = "info"             # debug | info | warn | error（既定 info）
+# idle_ttl_min = 1440          # 無操作でセッションのプロセスを終了するまでの分数（既定 1440＝24h、0 で無効）
 # model = ""                   # 空 = CLI 既定
 
 [slack]
