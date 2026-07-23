@@ -227,11 +227,13 @@ function handlersFor(
     onNotice: async (text) => {
       // Out-of-band status (e.g. idle-reaper pause / resume). Flush any active
       // stream first so the notice doesn't interleave with a streamed turn.
-      await flushStream(sessionKey);
+      // Both the flush and the post are inside the try: SessionManager invokes
+      // this with `void`, so an unhandled rejection here would surface nowhere.
       try {
+        await flushStream(sessionKey);
         await post({text});
       } catch (err) {
-        log.error(`Notice post failed: ${(err as Error).message}`);
+        log.error(`Notice delivery failed: ${(err as Error).message}`);
       }
     },
     onToolUse: async (toolName, input) => {

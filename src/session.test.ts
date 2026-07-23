@@ -84,9 +84,10 @@ test('idle reaper closes a session idle longer than idleTtlMs', async () => {
     assert.equal(mgr.getSessionInfo('thread-1')?.alive, true);
     // Let the async session-init line land first; its bump() would otherwise
     // refresh lastActivityMs to the post-advance clock and defeat the reap.
-    await waitFor(
+    const inited = await waitFor(
       () => mgr.getSessionInfo('thread-1')?.sessionId === 'sess-fake',
     );
+    assert.equal(inited, true, 'fake process should report its session id');
 
     // Advance the injected clock well past the TTL so the next scan reaps it.
     clock += 10_000;
@@ -116,13 +117,17 @@ test('idle reaper notifies the thread on pause and on resume', async () => {
     mgr.send('thread-1', 'hi', handlers);
     // Wait until the fake process reports its session id, so the later respawn
     // has something to --resume (and thus emits the resume notice).
-    await waitFor(
+    const inited = await waitFor(
       () => mgr.getSessionInfo('thread-1')?.sessionId === 'sess-fake',
     );
+    assert.equal(inited, true, 'fake process should report its session id');
 
     // Reap it, and confirm a pause notice was posted to the thread.
     clock += 10_000;
-    await waitFor(() => mgr.getSessionInfo('thread-1')?.alive === false);
+    const reaped = await waitFor(
+      () => mgr.getSessionInfo('thread-1')?.alive === false,
+    );
+    assert.equal(reaped, true, 'session should have been reaped');
     assert.equal(
       notices.some((n) => n.includes('一時停止')),
       true,
