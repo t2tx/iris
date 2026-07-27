@@ -13,7 +13,7 @@ importers:
         version: 4.7.3(@types/express@5.0.6)
       smol-toml:
         specifier: ^1.6.1
-        version: 1.6.1
+        version: 1.7.1
     devDependencies:
       '@eslint/js':
         specifier: ^10.0.1
@@ -311,8 +311,8 @@ packages:
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
 
-  '@types/express-serve-static-core@5.1.1':
-    resolution: {integrity: sha512-v4zIMr/cX7/d2BpAEX3KNKL/JrT1s43s96lLvvdTmza1oEvDudCqK9aF/djc/SWgy8Yh0h30TZx5VpzqFCxk5A==}
+  '@types/express-serve-static-core@5.1.2':
+    resolution: {integrity: sha512-d3KvEXBSo/lOAMc2u6fkyDHBvetBHeqD7wm/AcXfLpSOQwlmG9D/aQ0SFswVjv05p7ullQS7Mjohj6/VdbZuTg==}
 
   '@types/express@5.0.6':
     resolution: {integrity: sha512-sKYVuV7Sv9fbPIt/442koC7+IIwK5olP1KWeD88e/idgoJqDm3JV/YUiPwkoKK92ylff2MGxSz1CSjsXelx0YA==}
@@ -331,6 +331,9 @@ packages:
 
   '@types/node@25.9.3':
     resolution: {integrity: sha512-603BddQMv3pUcr4U2dhujk83N2tTDVr/34wII2B6bJy6g+8WD6yUb11jszNs0gdi4PesVWl7ABt8nYMVpnLUcg==}
+
+  '@types/node@25.9.5':
+    resolution: {integrity: sha512-OScDchr2fwuUmWdf4kZ9h7PcJiYDVInhJizG/biAq3cAvqwYktuy/TYGGdZNMtNTFUP7rnb0NU4TUdm82kt4Rg==}
 
   '@types/qs@6.15.1':
     resolution: {integrity: sha512-GZHUBZR9hckSUhrxmp1nG6NwdpM9fCunJwyThLW1X3AyHgd9IlHb6VANpQQqDr2o/qQp6McZ3y/IA2rVzKzSbw==}
@@ -1078,8 +1081,8 @@ packages:
     resolution: {integrity: sha512-6x6dK6zJdpTzF4sQeNYxwtvBzf6Eg4GtlesS94HOvTudUeyK2WXAaIfmDgsyslYrRBeFIlsi54AYsFGUuhmvrQ==}
     engines: {node: '>= 0.4'}
 
-  smol-toml@1.6.1:
-    resolution: {integrity: sha512-dWUG8F5sIIARXih1DTaQAX4SsiTXhInKf1buxdY9DIg4ZYPZK5nGM1VRIYmEbDbsHt7USo99xSLFu5Q1IqTmsg==}
+  smol-toml@1.7.1:
+    resolution: {integrity: sha512-PPlsspAZ4jbMBu5DMFhfUGDQLu/vrL4SyBROVS37x8ynnVmFIs1VPBz1Co8Xks3TvpIaZXmU85y4DrQ+UyVFoQ==}
     engines: {node: '>= 18'}
 
   statuses@2.0.2:
@@ -1378,19 +1381,19 @@ snapshots:
   '@types/body-parser@1.19.6':
     dependencies:
       '@types/connect': 3.4.38
-      '@types/node': 25.9.3
+      '@types/node': 25.9.5
 
   '@types/connect@3.4.38':
     dependencies:
-      '@types/node': 25.9.3
+      '@types/node': 25.9.5
 
   '@types/esrecurse@4.3.1': {}
 
   '@types/estree@1.0.9': {}
 
-  '@types/express-serve-static-core@5.1.1':
+  '@types/express-serve-static-core@5.1.2':
     dependencies:
-      '@types/node': 25.9.3
+      '@types/node': 25.9.5
       '@types/qs': 6.15.1
       '@types/range-parser': 1.2.7
       '@types/send': 1.2.1
@@ -1398,7 +1401,7 @@ snapshots:
   '@types/express@5.0.6':
     dependencies:
       '@types/body-parser': 1.19.6
-      '@types/express-serve-static-core': 5.1.1
+      '@types/express-serve-static-core': 5.1.2
       '@types/serve-static': 2.2.0
 
   '@types/http-errors@2.0.5': {}
@@ -1416,6 +1419,10 @@ snapshots:
     dependencies:
       undici-types: 7.24.6
 
+  '@types/node@25.9.5':
+    dependencies:
+      undici-types: 7.24.6
+
   '@types/qs@6.15.1': {}
 
   '@types/range-parser@1.2.7': {}
@@ -1424,12 +1431,12 @@ snapshots:
 
   '@types/send@1.2.1':
     dependencies:
-      '@types/node': 25.9.3
+      '@types/node': 25.9.5
 
   '@types/serve-static@2.2.0':
     dependencies:
       '@types/http-errors': 2.0.5
-      '@types/node': 25.9.3
+      '@types/node': 25.9.5
 
   '@types/ws@8.18.1':
     dependencies:
@@ -2231,7 +2238,7 @@ snapshots:
       side-channel-map: 1.0.1
       side-channel-weakmap: 1.0.2
 
-  smol-toml@1.6.1: {}
+  smol-toml@1.7.1: {}
 
   statuses@2.0.2: {}
 
