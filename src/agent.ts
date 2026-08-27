@@ -1,6 +1,6 @@
-import type {EventEmitter} from 'node:events';
-import {ClaudeProcess} from './backends/claude.js';
-import type {Attachment} from './attachments.js';
+import type { EventEmitter } from "node:events";
+import type { Attachment } from "./attachments.js";
+import { ClaudeProcess } from "./backends/claude.js";
 
 /**
  * agent.ts — the backend-agnostic contract a resident agent process must satisfy,
@@ -14,21 +14,21 @@ import type {Attachment} from './attachments.js';
  */
 
 /** How the backend gates tool use without a human round-trip. */
-export type PermissionMode = 'manual' | 'acceptEdits' | 'auto';
+export type PermissionMode = "manual" | "acceptEdits" | "auto";
 
 /** PermissionRequest is defined in protocol.ts (the pure parser); re-exported here
  * so agent consumers reach it from the contract module. */
-export type {PermissionRequest} from './protocol.js';
+export type { PermissionRequest } from "./protocol.js";
 
 /** Backend-independent options for spawning a session. */
 export interface AgentOptions {
-  bin: string;
-  workDir: string;
-  model?: string;
-  /** session id to --resume (omit for a fresh session) */
-  resume?: string;
-  /** appended to --append-system-prompt */
-  appendSystemPrompt?: string;
+	bin: string;
+	workDir: string;
+	model?: string;
+	/** session id to --resume (omit for a fresh session) */
+	resume?: string;
+	/** appended to --append-system-prompt */
+	appendSystemPrompt?: string;
 }
 
 /**
@@ -48,25 +48,25 @@ export interface AgentOptions {
  * rejected if the live process's id no longer matches.
  */
 export interface AgentProcess extends EventEmitter {
-  /** Unique per spawned process; used to reject stale permission clicks. */
-  readonly instanceId: number;
-  /** Whether the process is still running. */
-  isAlive(): boolean;
-  /** The last captured session id (empty until the init event arrives). */
-  getSessionId(): string;
-  /** The OS pid, if the process is running. */
-  getPid(): number | undefined;
-  /** Send a user message (optionally with inline attachments). */
-  send(prompt: string, attachments?: Attachment[]): void;
-  /** Resolve a pending permission request raised by this process. */
-  respondPermission(
-    requestId: string,
-    behavior: 'allow' | 'deny',
-    input?: Record<string, unknown>,
-    denyMessage?: string,
-  ): void;
-  /** Terminate the process tree. */
-  close(): void;
+	/** Unique per spawned process; used to reject stale permission clicks. */
+	readonly instanceId: number;
+	/** Whether the process is still running. */
+	isAlive(): boolean;
+	/** The last captured session id (empty until the init event arrives). */
+	getSessionId(): string;
+	/** The OS pid, if the process is running. */
+	getPid(): number | undefined;
+	/** Send a user message (optionally with inline attachments). */
+	send(prompt: string, attachments?: Attachment[]): void;
+	/** Resolve a pending permission request raised by this process. */
+	respondPermission(
+		requestId: string,
+		behavior: "allow" | "deny",
+		input?: Record<string, unknown>,
+		denyMessage?: string,
+	): void;
+	/** Terminate the process tree. */
+	close(): void;
 }
 
 /**
@@ -75,8 +75,8 @@ export interface AgentProcess extends EventEmitter {
  * SessionManager (see SessionConfig.createProcess).
  */
 export function createClaudeProcess(
-  opts: AgentOptions,
-  mode: PermissionMode,
+	opts: AgentOptions,
+	mode: PermissionMode,
 ): AgentProcess {
-  return new ClaudeProcess(opts, mode);
+	return new ClaudeProcess(opts, mode);
 }

@@ -9,9 +9,9 @@
  * a path expecting it to be uploaded, but nothing was attached.)
  */
 
-import {existsSync, readFileSync, statSync} from 'node:fs';
-import {basename, join} from 'node:path';
-import {homedir} from 'node:os';
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 
 /**
  * Match local file paths in text: absolute (`/...`) or home-relative (`~/...`),
@@ -22,12 +22,12 @@ const PATH_PATTERN = /(?:^|\s|`)((?:~\/|\/)[\w./-]+)/gm;
 
 /** Expand a leading `~/` to the user's home directory. */
 function expandHome(p: string): string {
-  return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;
+	return p.startsWith("~/") ? join(homedir(), p.slice(2)) : p;
 }
 
 export interface DetectedFile {
-  path: string;
-  name: string;
+	path: string;
+	name: string;
 }
 
 /**
@@ -35,45 +35,45 @@ export interface DetectedFile {
  * type is accepted. Returns a deduplicated list. Directories are skipped.
  */
 export function detectFiles(text: string): DetectedFile[] {
-  const seen = new Set<string>();
-  const results: DetectedFile[] = [];
+	const seen = new Set<string>();
+	const results: DetectedFile[] = [];
 
-  for (const match of text.matchAll(PATH_PATTERN)) {
-    // Trim a trailing backtick/punctuation the greedy class may have caught.
-    const raw = match[1]!.replace(/[`.,)]+$/, '');
-    const filePath = expandHome(raw);
-    if (seen.has(filePath)) continue;
-    seen.add(filePath);
+	for (const match of text.matchAll(PATH_PATTERN)) {
+		// Trim a trailing backtick/punctuation the greedy class may have caught.
+		const raw = match[1]!.replace(/[`.,)]+$/, "");
+		const filePath = expandHome(raw);
+		if (seen.has(filePath)) continue;
+		seen.add(filePath);
 
-    if (!existsSync(filePath)) continue;
-    if (!statSync(filePath).isFile()) continue; // skip directories
+		if (!existsSync(filePath)) continue;
+		if (!statSync(filePath).isFile()) continue; // skip directories
 
-    results.push({path: filePath, name: basename(filePath)});
-  }
+		results.push({ path: filePath, name: basename(filePath) });
+	}
 
-  return results;
+	return results;
 }
 
 /**
  * Upload a local file to a Slack channel/thread.
  */
 export async function uploadFile(
-  client: {
-    filesUploadV2: (args: Record<string, unknown>) => Promise<unknown>;
-  },
-  file: DetectedFile,
-  channel: string,
-  threadTs?: string,
+	client: {
+		filesUploadV2: (args: Record<string, unknown>) => Promise<unknown>;
+	},
+	file: DetectedFile,
+	channel: string,
+	threadTs?: string,
 ): Promise<void> {
-  const content = readFileSync(file.path);
-  const args: Record<string, unknown> = {
-    channel_id: channel,
-    file: content,
-    filename: file.name,
-    title: file.name,
-  };
-  if (threadTs) args['thread_ts'] = threadTs;
-  await client.filesUploadV2(args);
+	const content = readFileSync(file.path);
+	const args: Record<string, unknown> = {
+		channel_id: channel,
+		file: content,
+		filename: file.name,
+		title: file.name,
+	};
+	if (threadTs) args["thread_ts"] = threadTs;
+	await client.filesUploadV2(args);
 }
 
 /**
@@ -82,11 +82,11 @@ export async function uploadFile(
  * injected for testability.
  */
 export function replyFilename(now: Date): string {
-  const p = (n: number, w = 2): string => String(n).padStart(w, '0');
-  const stamp =
-    `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}` +
-    `-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
-  return `iris-reply-${stamp}.md`;
+	const p = (n: number, w = 2): string => String(n).padStart(w, "0");
+	const stamp =
+		`${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}` +
+		`-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
+	return `iris-reply-${stamp}.md`;
 }
 
 /**
@@ -95,23 +95,23 @@ export function replyFilename(now: Date): string {
  * normal message — sending the full text as a snippet keeps nothing hidden.
  */
 export async function uploadText(
-  client: {
-    filesUploadV2: (args: Record<string, unknown>) => Promise<unknown>;
-  },
-  text: string,
-  filename: string,
-  channel: string,
-  threadTs?: string,
+	client: {
+		filesUploadV2: (args: Record<string, unknown>) => Promise<unknown>;
+	},
+	text: string,
+	filename: string,
+	channel: string,
+	threadTs?: string,
 ): Promise<void> {
-  const args: Record<string, unknown> = {
-    channel_id: channel,
-    // Pass an explicit UTF-8 buffer, not the `content` string: with `content`,
-    // Slack mis-decodes multibyte text (Japanese came back mojibake). A Buffer
-    // is uploaded verbatim and rendered as UTF-8.
-    file: Buffer.from(text, 'utf-8'),
-    filename,
-    title: filename,
-  };
-  if (threadTs) args['thread_ts'] = threadTs;
-  await client.filesUploadV2(args);
+	const args: Record<string, unknown> = {
+		channel_id: channel,
+		// Pass an explicit UTF-8 buffer, not the `content` string: with `content`,
+		// Slack mis-decodes multibyte text (Japanese came back mojibake). A Buffer
+		// is uploaded verbatim and rendered as UTF-8.
+		file: Buffer.from(text, "utf-8"),
+		filename,
+		title: filename,
+	};
+	if (threadTs) args["thread_ts"] = threadTs;
+	await client.filesUploadV2(args);
 }

@@ -1,93 +1,92 @@
-import {describe, it} from 'node:test';
-import assert from 'node:assert/strict';
-import {mkdtempSync, writeFileSync, rmSync} from 'node:fs';
-import {join, sep} from 'node:path';
-import {homedir} from 'node:os';
-import {detectFiles, replyFilename} from './file-upload.js';
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, sep } from "node:path";
+import { describe, expect, it } from "vitest";
+import { detectFiles, replyFilename } from "./file-upload.js";
 
-describe('detectFiles', () => {
-  it('detects absolute image paths', () => {
-    const text = 'I created the chart at /tmp/chart.png for you.';
-    const files = detectFiles(text);
-    // Won't exist on CI, so we test the pattern matching only
-    // (existsSync will filter it out — that's correct behavior)
-    assert.ok(files.length === 0 || files[0]!.name === 'chart.png');
-  });
+describe("detectFiles", () => {
+	it("detects absolute image paths", () => {
+		const text = "I created the chart at /tmp/chart.png for you.";
+		const files = detectFiles(text);
+		// Won't exist on CI, so we test the pattern matching only
+		// (existsSync will filter it out — that's correct behavior)
+		expect(files.length === 0 || files[0]!.name === "chart.png").toBeTruthy();
+	});
 
-  it('detects paths in backticks', () => {
-    const text = 'File saved to `/Users/me/output.pdf`';
-    const files = detectFiles(text);
-    assert.ok(files.length === 0 || files[0]!.name === 'output.pdf');
-  });
+	it("detects paths in backticks", () => {
+		const text = "File saved to `/Users/me/output.pdf`";
+		const files = detectFiles(text);
+		expect(files.length === 0 || files[0]!.name === "output.pdf").toBeTruthy();
+	});
 
-  it('detects source files regardless of extension (e.g. .ts)', () => {
-    // Any existing regular file is uploadable now, including source code.
-    const dir = mkdtempSync(join(homedir(), '.iris-test-'));
-    try {
-      const filePath = join(dir, 'index.ts');
-      writeFileSync(filePath, 'export const x = 1;');
-      const files = detectFiles(`I edited ${filePath}`);
-      assert.equal(files.length, 1);
-      assert.equal(files[0]!.name, 'index.ts');
-    } finally {
-      rmSync(dir, {recursive: true, force: true});
-    }
-  });
+	it("detects source files regardless of extension (e.g. .ts)", () => {
+		// Any existing regular file is uploadable now, including source code.
+		const dir = mkdtempSync(join(homedir(), ".iris-test-"));
+		try {
+			const filePath = join(dir, "index.ts");
+			writeFileSync(filePath, "export const x = 1;");
+			const files = detectFiles(`I edited ${filePath}`);
+			expect(files.length).toBe(1);
+			expect(files[0]!.name).toBe("index.ts");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 
-  it('skips directories (only regular files are uploaded)', () => {
-    const dir = mkdtempSync(join(homedir(), '.iris-test-'));
-    try {
-      const files = detectFiles(`the folder ${dir} has your output`);
-      assert.equal(files.length, 0);
-    } finally {
-      rmSync(dir, {recursive: true, force: true});
-    }
-  });
+	it("skips directories (only regular files are uploaded)", () => {
+		const dir = mkdtempSync(join(homedir(), ".iris-test-"));
+		try {
+			const files = detectFiles(`the folder ${dir} has your output`);
+			expect(files.length).toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 
-  it('ignores relative paths', () => {
-    const text = 'See ./output.png for the result';
-    const files = detectFiles(text);
-    assert.equal(files.length, 0);
-  });
+	it("ignores relative paths", () => {
+		const text = "See ./output.png for the result";
+		const files = detectFiles(text);
+		expect(files.length).toBe(0);
+	});
 
-  it('deduplicates same path', () => {
-    const text = '/tmp/a.png and again /tmp/a.png';
-    const files = detectFiles(text);
-    assert.ok(files.length <= 1);
-  });
+	it("deduplicates same path", () => {
+		const text = "/tmp/a.png and again /tmp/a.png";
+		const files = detectFiles(text);
+		expect(files.length <= 1).toBeTruthy();
+	});
 
-  it('expands ~/ to home and detects the real file', () => {
-    // Create a real file under the home directory so existsSync passes,
-    // then reference it via ~/ — Claude often writes paths this way.
-    const dir = mkdtempSync(join(homedir(), '.iris-test-'));
-    try {
-      const filePath = join(dir, 'report.pdf');
-      writeFileSync(filePath, 'x');
-      const rel = filePath
-        .slice(homedir().length + 1)
-        .split(sep)
-        .join('/');
-      const files = detectFiles(`Saved to ~/${rel}`);
-      assert.equal(files.length, 1);
-      assert.equal(files[0]!.name, 'report.pdf');
-      // path is expanded to an absolute path (no leading ~)
-      assert.ok(files[0]!.path.startsWith(homedir()));
-    } finally {
-      rmSync(dir, {recursive: true, force: true});
-    }
-  });
+	it("expands ~/ to home and detects the real file", () => {
+		// Create a real file under the home directory so existsSync passes,
+		// then reference it via ~/ — Claude often writes paths this way.
+		const dir = mkdtempSync(join(homedir(), ".iris-test-"));
+		try {
+			const filePath = join(dir, "report.pdf");
+			writeFileSync(filePath, "x");
+			const rel = filePath
+				.slice(homedir().length + 1)
+				.split(sep)
+				.join("/");
+			const files = detectFiles(`Saved to ~/${rel}`);
+			expect(files.length).toBe(1);
+			expect(files[0]!.name).toBe("report.pdf");
+			// path is expanded to an absolute path (no leading ~)
+			expect(files[0]!.path.startsWith(homedir())).toBeTruthy();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
 
-describe('replyFilename', () => {
-  it('builds a timestamped .md filename from local time', () => {
-    // 2026-06-30 20:15:09 local
-    const name = replyFilename(new Date(2026, 5, 30, 20, 15, 9));
-    assert.equal(name, 'iris-reply-20260630-201509.md');
-  });
+describe("replyFilename", () => {
+	it("builds a timestamped .md filename from local time", () => {
+		// 2026-06-30 20:15:09 local
+		const name = replyFilename(new Date(2026, 5, 30, 20, 15, 9));
+		expect(name).toBe("iris-reply-20260630-201509.md");
+	});
 
-  it('zero-pads month, day, and time fields', () => {
-    // 2026-01-05 09:03:07 local
-    const name = replyFilename(new Date(2026, 0, 5, 9, 3, 7));
-    assert.equal(name, 'iris-reply-20260105-090307.md');
-  });
+	it("zero-pads month, day, and time fields", () => {
+		// 2026-01-05 09:03:07 local
+		const name = replyFilename(new Date(2026, 0, 5, 9, 3, 7));
+		expect(name).toBe("iris-reply-20260105-090307.md");
+	});
 });

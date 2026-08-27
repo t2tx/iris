@@ -12,17 +12,17 @@
 - pnpm
 
 ```bash
-pnpm install   # 初回。prepare フックで lefthook も入る
+pnpm install       #  初回。prepare フックで lefthook も入る
 ```
 
 ## 品質ゲート
 
 ```bash
-pnpm verify          # typecheck → lint → format:check → test（push 前にこれが通ること）
-pnpm test            # 単体テスト（node:test）
-pnpm test:coverage   # カバレッジ（lcov.info を出力）
-pnpm lint            # eslint + 複雑度チェック
-pnpm format          # prettier --write
+pnpm verify       # typecheck → check → test（push 前にこれが通ること）
+pnpm test         # 単体テスト（vitest）
+pnpm test:coverage # カバレッジ（v8 / coverage/ に出力）
+pnpm lint         # biome + 複雑度チェック
+pnpm check:fix    # biome --write
 ```
 
 - `pre-push` で `pnpm verify` が自動実行されます（lefthook）。
@@ -57,7 +57,7 @@ gh pr merge --squash --delete-branch
 
 ```bash
 cp iris.config.example.toml iris.config.toml   # トークン・work_dir・許可リストを記入
-pnpm dev                                        # tsx watch（自動再起動）で起動
+pnpm dev           #  tsx watch（自動再起動）で起動
 ```
 
 ## 本番と開発を同時に動かす（Slack App を分ける）
@@ -106,7 +106,7 @@ pnpm dev                                        # tsx watch（自動再起動）
 SEA）を作れます。利用者は Node/npm 無しでダウンロード＆実行できます。
 
 ```bash
-pnpm build:sea          # ad-hoc 署名（自分の Mac 用）→ dist-sea/iris （arm64, ~108MB）
+pnpm build:sea     #  ad-hoc 署名（自分の Mac 用）→ dist-sea/iris （arm64, ~108MB）
 ```
 
 中身: esbuild で 1 ファイルに bundle → Node SEA でブロブを node バイナリ

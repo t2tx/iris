@@ -1,13 +1,13 @@
 pre-commit:
   jobs:
-    - name: format
-      glob: "**/*.ts"
-      run: pnpm prettier --write {staged_files} && git add {staged_files}
-    - name: lint
-      glob: "**/*.ts"
-      run: pnpm eslint --fix {staged_files} && git add {staged_files}
+     - name: format
+       glob: "**/*.ts"
+       run: pnpm biome check --write {staged_files} && git add {staged_files}
+     - name: lint
+       glob: "**/*.ts"
+       run: pnpm biome check {staged_files}
 
 pre-push:
   jobs:
-    - name: verify
-      run: pnpm verify
+     - name: verify
+       run: pnpm verify
