@@ -2,7 +2,7 @@ import {existsSync, readFileSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {parse as parseToml} from 'smol-toml';
-import type {PermissionMode} from './claude.js';
+import type {PermissionMode} from './agent.js';
 import {isLogLevel, type LogLevel} from './log.js';
 
 /**
