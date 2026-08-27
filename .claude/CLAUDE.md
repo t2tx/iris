@@ -89,31 +89,31 @@ claude --output-format stream-json --input-format stream-json \
 ### コードスタイル
 
 - TypeScript / ESM（`type: module`）。Node 22（`.node-version` で 22.18.0 に固定）。
-- Prettier 設定: `singleQuote` / `trailingComma: all` / `bracketSpacing: false`（mile-server-monitor と同じ流儀）。
-- ESLint は flat config + `typescript-eslint` の型付きルール + `prettier`。
+- Biome（`biome.json`）で lint + format を一元管理。`quoteStyle: single` / `trailingCommas: all` / `bracketSpacing: false`。複雑度（ディレクトリファイル数）は `scripts/check-complexity.sh` が補完。
+- 型付きルール（元 `typescript-eslint` の `no-floating-promises` / `no-unsafe-argument`）は Biome が持たないため `typecheck`(`tsc --noEmit`, `noUncheckedIndexedAccess` 等) でカバー。
 - パッケージマネージャは **pnpm**。
 
 ### 既知の流儀・ハマり所
 
 - `@slack/bolt` v4 は CommonJS で named export → `import * as bolt` で取る。
 - `KnownBlock` 型は `import type {types} from '@slack/bolt'` の `types.KnownBlock` から取る（`@slack/types` は推移的依存なので直接 import しない）。
-- Bolt のリスナーは戻り値が `Promise<void>` 必須 → ハンドラは `async` を維持する（`require-await` は off にしてある）。
+- Bolt のリスナーは戻り値が `Promise<void>` 必須 → ハンドラは `async` を維持する。Biome には `require-await` 相当のルールはないため、非同期ハンドラに `await` が無くても無視してよい（元 ESLint 設定の `require-await: off` を継承）。
 - IO を持つ層（spawn / Bolt）は単体テストしない。ロジックは `protocol.ts` のように純粋関数へ切り出してテストする。
 
 ## テスト
 
-- **node:test + tsx**（追加依存ゼロ）。`*.test.ts` を `src/` に配置。
+- **vitest**。`*.test.ts` を `src/` に配置（`import {expect, test, describe, it} from 'vitest'`）。
 - 純粋ロジック（protocol / format / permission）を中心にテスト。
 
 ```bash
 pnpm test            # 単体テスト
-pnpm test:coverage   # カバレッジ（lcov.info を出力）
+pnpm test:coverage   # カバレッジ（v8 / coverage/ に出力）
 ```
 
 ## 品質ゲート
 
 ```bash
-pnpm verify          # typecheck → lint → format:check → test（push 前にこれが全部通ること）
+pnpm verify          # typecheck → check → test（push 前にこれが全部通ること）
 ```
 
 - **lefthook** の `pre-push` で `pnpm verify` が自動実行される（`pnpm install` 時に `prepare` が `lefthook install` する）。

@@ -21,8 +21,8 @@ reviews:
       - main
   # CodeRabbit に走らせる追加チェック。CI と重複しすぎないよう必要なものだけ。
   tools:
-    # TypeScript/JS の静的解析。CI の eslint と補完関係(CodeRabbit 側は設定不要で動く)
-    eslint:
+    # TypeScript/JS の静的解析。CI の biome と補完関係(CodeRabbit 側は設定不要で動く)
+    biome:
       enabled: true
     # シェルスクリプト(scripts/*.sh, build-sea 系)の lint
     shellcheck:
