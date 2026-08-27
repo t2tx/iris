@@ -2,43 +2,36 @@ import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {EventEmitter} from 'node:events';
 import {createInterface} from 'node:readline';
 import {randomInt} from 'node:crypto';
-import {parseLine, type PermissionRequest} from './protocol.js';
-import {buildContent, type Attachment} from './attachments.js';
+import {parseLine, type PermissionRequest} from '../protocol.js';
+import {buildContent, type Attachment} from '../attachments.js';
+import type {AgentOptions, AgentProcess, PermissionMode} from '../agent.js';
 
 /**
  * claude.ts — manages a long-running Claude Code process using
- *   --input-format stream-json --output-format stream-json --permission-prompt-tool stdio
+ *     --input-format stream-json --output-format stream-json --permission-prompt-tool stdio
  *
  * We write newline-delimited JSON to stdin (user messages, permission responses)
  * and consume the parsed event stream from protocol.ts. Protocol shapes
  * verified against cc-connect's agent/claudecode/session.go.
+ *
+ * The backend-agnostic contract (AgentProcess), the shared option shape
+ * (AgentOptions) and PermissionMode live in agent.ts; ClaudeProcess implements
+ * that contract so a different agent backend can be substituted via
+ * SessionConfig.createProcess.
  */
-
-export type PermissionMode = 'manual' | 'acceptEdits' | 'auto';
-export type {PermissionRequest} from './protocol.js';
-
-export interface ClaudeOptions {
-  bin: string;
-  workDir: string;
-  model?: string;
-  /** session id to --resume (omit for a fresh session) */
-  resume?: string;
-  /** appended to --append-system-prompt */
-  appendSystemPrompt?: string;
-}
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
 
 /**
  * Events emitted:
- *   "session"    (sessionId: string)           — captured from the system init event
- *   "text"       (text: string)                — assistant text content
- *   "thinking"   (text: string)
- *   "tool_use"   (toolName: string, input)     — progress signal
- *   "permission" (req: PermissionRequest)      — needs allow/deny
- *   "result"     (raw: Record<string,unknown>) — turn finished
- *   "exit"       (code, signal)
- *   "error"      (err: Error)
+ *      "session"     (sessionId: string)            — captured from the system init event
+ *      "text"        (text: string)                 — assistant text content
+ *      "thinking"    (text: string)
+ *      "tool_use"    (toolName: string, input)      — progress signal
+ *      "permission"  (req: PermissionRequest)       — needs allow/deny
+ *      "result"      (raw: Record<string,unknown>)  — turn finished
+ *      "exit"        (code, signal)
+ *      "error"       (err: Error)
  */
 // Seed the per-process counter from a random boot offset so instanceIds do not
 // repeat across Iris restarts. A plain `1, 2, …` counter resets on restart,
@@ -48,7 +41,7 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
 // vanishingly unlikely while keeping ids monotonic within a single run.
 let nextInstanceId = randomInt(1, 1_000_000_000);
 
-export class ClaudeProcess extends EventEmitter {
+export class ClaudeProcess extends EventEmitter implements AgentProcess {
   private proc: ChildProcessWithoutNullStreams;
   private alive = false;
   private sessionId = '';
@@ -57,7 +50,7 @@ export class ClaudeProcess extends EventEmitter {
   /** Unique per spawned process; used to reject stale permission clicks. */
   readonly instanceId = nextInstanceId++;
 
-  constructor(opts: ClaudeOptions, mode: PermissionMode) {
+  constructor(opts: AgentOptions, mode: PermissionMode) {
     super();
     this.mode = mode;
     this.workDir = opts.workDir;

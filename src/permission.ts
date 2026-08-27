@@ -1,5 +1,5 @@
 import type {types} from '@slack/bolt';
-import type {PermissionRequest} from './claude.js';
+import type {PermissionRequest} from './agent.js';
 
 type Block = types.KnownBlock;
 

@@ -1,17 +1,23 @@
 import {
-  ClaudeProcess,
+  createClaudeProcess,
+  type AgentOptions,
+  type AgentProcess,
   type PermissionMode,
   type PermissionRequest,
-} from './claude.js';
+} from './agent.js';
 import type {UsageInfo} from './protocol.js';
 import type {Attachment} from './attachments.js';
 
 /**
- * session.ts — maps a Slack thread (thread_ts) to a long-running ClaudeProcess.
+ * session.ts — maps a Slack thread (thread_ts) to a long-running agent process.
  *
- * One Slack thread == one Claude session == one resident process.
+ * One Slack thread == one agent session == one resident process.
  * When a process dies, we keep its last session_id so the next message can
  * resume it with `--resume`.
+ *
+ * The manager depends only on the backend-agnostic AgentProcess contract, not on
+ * a concrete process class. Which backend to spawn is decided by the
+ * createProcess factory in SessionConfig (defaulted to the Claude Code backend).
  */
 
 export interface SessionConfig {
@@ -20,6 +26,13 @@ export interface SessionConfig {
   model?: string;
   appendSystemPrompt?: string;
   mode: PermissionMode;
+  /**
+   * Build a resident agent process for a thread's session. Injecting the
+   * factory inverts the dependency on the concrete backend, so a different
+   * agent (e.g. a Pi coding-agent) can be swapped in without touching this
+   * manager. Defaults to the Claude Code backend.
+   */
+  createProcess?: (opts: AgentOptions, mode: PermissionMode) => AgentProcess;
   /**
    * Close a session's process after this many ms with no activity (its session
    * id is kept, so the next message resumes it via --resume). 0 disables the
@@ -31,8 +44,8 @@ export interface SessionConfig {
 }
 
 interface Entry {
-  proc: ClaudeProcess;
-  sessionId: string; // last known Claude session id (for resume after death)
+  proc: AgentProcess;
+  sessionId: string; // last known session id (for resume after death)
   lastActivityMs: number; // for idle reaping
   handlers: ThreadHandlers; // last handlers seen, for out-of-band notices
   idleClosed: boolean; // set when the reaper closed this session's process
@@ -80,11 +93,16 @@ export class SessionManager {
   // Pending --resume target set by /resume, applied on the next spawn.
   private readonly resumeOverrides = new Map<string, string>();
   private readonly now: () => number;
+  private readonly createProcess: (
+    opts: AgentOptions,
+    mode: PermissionMode,
+  ) => AgentProcess;
   private reaper?: ReturnType<typeof setInterval>;
 
   constructor(cfg: SessionConfig) {
     this.cfg = cfg;
     this.now = cfg.now ?? Date.now;
+    this.createProcess = cfg.createProcess ?? defaultCreateProcess;
     const ttl = cfg.idleTtlMs ?? 0;
     if (ttl > 0) {
       // Scan no less often than the TTL itself (so a tiny TTL still reaps
@@ -123,7 +141,7 @@ export class SessionManager {
   }
 
   /**
-   * Attach this thread to an existing Claude session id on its next message.
+   * Attach this thread to an existing session id on its next message.
    * Used by /resume to reconnect after Iris restarts (which clears the
    * in-memory entries). Kills any live process so the next message respawns
    * with --resume.
@@ -156,7 +174,7 @@ export class SessionManager {
   }
 
   /** Get the live process for a thread, spawning (or resuming) as needed. */
-  private ensure(threadTs: string, handlers: ThreadHandlers): ClaudeProcess {
+  private ensure(threadTs: string, handlers: ThreadHandlers): AgentProcess {
     const existing = this.entries.get(threadTs);
     if (existing && existing.proc.isAlive()) {
       existing.lastActivityMs = this.now();
@@ -173,7 +191,7 @@ export class SessionManager {
     const resumingAfterIdle = existing?.idleClosed === true && Boolean(resume);
     this.resumeOverrides.delete(threadTs);
     const workDir = this.workDirOverrides.get(threadTs) ?? this.cfg.workDir;
-    const proc = new ClaudeProcess(
+    const proc = this.createProcess(
       {
         bin: this.cfg.bin,
         workDir,
@@ -300,7 +318,7 @@ export class SessionManager {
   }
 
   /**
-   * Soft restart: kill the Claude process but keep the entry so the next
+   * Soft restart: kill the process but keep the entry so the next
    * message resumes the same conversation (--resume). Returns true if killed.
    */
   killSession(sessionKey: string): boolean {
@@ -332,4 +350,12 @@ export class SessionManager {
     for (const {proc} of this.entries.values()) proc.close();
     this.entries.clear();
   }
+}
+
+/** The default backend factory: spawns the Claude Code process. */
+function defaultCreateProcess(
+  opts: AgentOptions,
+  mode: PermissionMode,
+): AgentProcess {
+  return createClaudeProcess(opts, mode);
 }
