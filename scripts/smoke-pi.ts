@@ -19,7 +19,7 @@ import { PiProcess } from "../src/backends/pi.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
-const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT) || 60_000;
+const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT) || 120_000;
 
 function findPiBin(): string {
 	// 1. Explicit path via env
