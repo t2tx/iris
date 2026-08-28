@@ -99,6 +99,33 @@ allow_users = ["U09XXXXXXX"]      # この人の DM に反応
 
 サンプル: [iris.config.example.toml](./iris.config.example.toml)。詳細な手順は **[docs/slack-setup.md](./docs/slack-setup.md)** を参照。
 
+### エージェント・バックエンドの選定
+
+Iris は既定で [Claude Code](https://claude.com/claude-code)（`claude` CLI）を駆動します。
+[**Pi** コーディング・エージェント](https://github.com/earendil-works/pi)を
+`agent = "pi"` で選ぶこともできます（プロジェクト単位、またはトップレベルの既定で）。
+
+- トップレベルの `agent` キーでバックエンドを選定（既定 `claude`、各プロジェクトで上書き可）。
+- 既定の Claude バックエンドは何も変更不要。`agent` 未指定 = `claude`。
+
+```toml
+# 全プロジェクトで Pi を使う場合（トップレベル既定。各プロジェクトで上書き可）:
+agent = "pi"
+# pi_bin = "pi"             # Pi CLI のパス（既定 "pi"。PATH に無ければこのパスを指定）
+
+[[projects]]
+name = "pi-lab"
+work_dir = "/path/to/your/repo"
+allow_users = ["U09XXXXXXX"]
+# agent = "pi"             # プロジェクト単位の指定（省略時はトップレベルを継承）
+```
+
+- **Pi のインストール**: Iris は `pi` CLI を起動するだけで、インストールは行いません。
+  Pi のインストール・認証は [Pi リポジトリ](https://github.com/earendil-works/pi)
+  の手順に従って行ってください。PATH に無ければ `pi_bin` でパスを指定します。
+- 両バックエンドとも Slack に向けて同じ面（権限ボタン・進捗表示・セッション再開）を
+  提示します。違いは駆動する CLI のみです。
+
 ### 4. 起動する
 
 ```bash
@@ -125,6 +152,8 @@ iris status     # launchd の稼働確認（macOS のみ）
 |-----|------|------|
 | `bot_token` / `app_token` | `[slack]` | Slack トークン（`xoxb-` / `xapp-`） |
 | `claude_bin` | トップレベル | claude CLI のパス（既定 `claude`） |
+| `agent` | トップレベル / 各 project | バックエンド `claude` \| `pi`（既定 `claude`） |
+| `pi_bin` | トップレベル | Pi CLI のパス（既定 `pi`、`agent = "pi"` のとき使用） |
 | `permission_mode` | トップレベル / 各 project | `manual` \| `acceptEdits` \| `auto` |
 | `log_level` | トップレベル | `debug` \| `info` \| `warn` \| `error`（既定 `info`） |
 | `idle_ttl_min` | トップレベル | 無操作が続いたセッションのプロセスを終了するまでの分数（既定 `1440`＝24h、`0` で無効）。環境変数 `IRIS_IDLE_TTL_MIN` で上書き可 |
