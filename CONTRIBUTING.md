@@ -4,7 +4,7 @@
 [README.md](./README.md) と [docs/slack-setup.md](./docs/slack-setup.md) で完結します
 （Slack App は 1 つ作れば十分です）。
 
-設計・アーキテクチャの詳細は [.claude/CLAUDE.md](./.claude/CLAUDE.md) を参照してください。
+設計・アーキテクチャの詳細は [AGENTS.md](./AGENTS.md)（リポジトリ根）を参照してください。
 
 ## 前提
 
