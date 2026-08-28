@@ -46,6 +46,54 @@ export function resolveConfigPath(
 	return candidates.find((p) => existsSync(p));
 }
 
+/**
+ * Standard directories an installed (launchd) Iris service should always have on
+ * PATH, front-to-back. homebrew-on-Apple-Silicon goes first — its bin
+ * (/opt/homebrew/bin) is the common home of the claude / pi CLIs and is absent
+ * from a default launchd environment.
+ */
+export const STANDARD_PATH_DIRS = [
+	"/opt/homebrew/bin",
+	"/usr/local/bin",
+	"/usr/bin",
+	"/bin",
+	"/usr/sbin",
+	"/sbin",
+] as const;
+
+/**
+ * Build the PATH an installed (launchd) Iris service runs with, so a spawned
+ * agent CLI (claude / pi) can be found on PATH.
+ *
+ * A minimal hardcoded PATH (usr/local/bin, usr/bin, bin, binDir) misses the
+ * user-managed bin dirs where claude / pi actually live (nodenv, homebrew,
+ * ~/.local/bin, …), so spawn("claude") / spawn("pi") hits ENOENT under
+ * launchd. `iris install` runs from the user's interactive shell, so we forward
+ * that shell's PATH, on top of STANDARD_PATH_DIRS.
+ *
+ * Precedence (first occurrence wins, duplicates dropped):
+ *   STANDARD_PATH_DIRS -> binDir -> inherited PATH entries
+ * `inheritPath` splits on `:`; empty segments (and an empty/undefined value)
+ * are skipped.
+ */
+export function composeLaunchdPath(
+	binDir: string,
+	inheritPath?: string,
+): string {
+	const parts: string[] = [...STANDARD_PATH_DIRS];
+	if (binDir) parts.push(binDir);
+	if (inheritPath) parts.push(...inheritPath.split(":"));
+
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const p of parts) {
+		if (!p || seen.has(p)) continue;
+		seen.add(p);
+		out.push(p);
+	}
+	return out.join(":");
+}
+
 const PERMISSION_MODES: readonly PermissionMode[] = [
 	"manual",
 	"acceptEdits",

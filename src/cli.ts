@@ -26,6 +26,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import {
 	ConfigError,
+	composeLaunchdPath,
 	defaultConfigPath,
 	loadConfig,
 	resolveConfigPath,
@@ -458,6 +459,11 @@ function buildPlist(programArgs: string[], configPath: string): string {
 		.map((a) => `    <string>${a}</string>`)
 		.join("\n");
 	const binDir = dirname(programArgs[0]!);
+	// A minimal hardcoded PATH misses the user-managed bin dirs where claude / pi
+	// live (nodenv, homebrew, …). Under launchd the spawned agent CLI ENOENTs,
+	// so `iris install` forwards its caller's PATH (see composeLaunchdPath in
+	// config.ts).
+	const launchdPath = composeLaunchdPath(binDir, process.env.PATH);
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -475,7 +481,7 @@ ${argsXml}
     <key>IRIS_CONFIG</key>
     <string>${configPath}</string>
     <key>PATH</key>
-    <string>/usr/local/bin:/usr/bin:/bin:${binDir}</string>
+    <string>${launchdPath}</string>
   </dict>
 
   <key>RunAtLoad</key>
