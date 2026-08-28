@@ -18,6 +18,16 @@ function makePoster() {
 
 const identity = (s: string) => s;
 
+// A poster whose post/update both reject — models a transient Slack failure.
+const failingPoster: SlackPoster = {
+	post: async () => {
+		throw new Error("failed to fetch");
+	},
+	update: async () => {
+		throw new Error("failed to fetch");
+	},
+};
+
 describe("StreamBuffer", () => {
 	it("flush posts a new message on first call", async () => {
 		const { poster, calls } = makePoster();
@@ -92,5 +102,19 @@ describe("StreamBuffer", () => {
 		await buf.flush();
 		expect(calls[0]!.args[0]).toBe("I'm ready to help");
 		expect(buf.getFullText()).toBe("I'm ready to help");
+	});
+
+	// Issue #65 (fire-and-forget flood): a rejecting poster must NOT make
+	// flush() reject, or the fire-and-forget callers (onText via append and the
+	// scheduleUpdate timer's `void pushToSlack`) would each surface an unhandled
+	// promise rejection. pushToSlack now catches-and-logs instead.
+	it("flush swallows a rejecting poster (no unhandled rejection)", async () => {
+		const buf = new StreamBuffer(failingPoster, identity);
+		buf.append("hello");
+		// Must resolve (not reject) even though the underlying post fails.
+		await expect(buf.flush()).resolves.toBeUndefined();
+		expect(buf.getFullText()).toBe("hello");
+		// A second flush is also safe.
+		await expect(buf.flush()).resolves.toBeUndefined();
 	});
 });
