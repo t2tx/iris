@@ -144,6 +144,36 @@ allow_users = ["U09XXXXXXX"]       # respond to this user's DMs
 - Add multiple `[[projects]]` for different work dirs / permission modes per
   channel or user. Template: [iris.config.example.toml](./iris.config.example.toml).
 
+### Choosing an agent backend
+
+By default Iris drives [Claude Code](https://claude.com/claude-code) (`claude`
+CLI). It can also drive the [**Pi** coding agent](https://github.com/earendil-works/pi),
+selected per project (or as the top-level default) with `agent = "pi"`.
+
+Select the backend with the top-level `agent` key (default `claude`, override per
+project). The default Claude backend needs no change — `agent` unset means
+`claude`.
+
+```toml
+# Use Pi for every project (top-level default; per-project can override):
+agent = "pi"
+# pi_bin = "pi"            # PATH to the Pi CLI (default "pi"; override if not on PATH)
+
+[[projects]]
+name = "pi-lab"
+work_dir = "/path/to/your/repo"
+allow_users = ["U09XXXXXXX"]
+# agent = "pi"            # per-project override (omitted inherits top-level)
+```
+
+**Installing Pi:** Iris only launches the `pi` CLI; it does not install it.
+Install and authenticate Pi by following the
+[Pi repository](https://github.com/earendil-works/pi) instructions. Point
+`pi_bin` at it if it is not on your `PATH`.
+
+Both backends expose the same surface to Slack (tool-permission buttons,
+progress, session resume); only the underlying CLI differs.
+
 Slack app setup walkthrough: [docs/slack-setup.md](./docs/slack-setup.md) (Japanese).
 
 ## Run
