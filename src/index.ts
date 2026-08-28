@@ -3,7 +3,10 @@ import * as bolt from "@slack/bolt";
 
 const { App, LogLevel } = bolt;
 
+import type { AgentOptions, AgentProcess, PermissionMode } from "./agent.js";
 import type { Attachment } from "./attachments.js";
+import { ClaudeProcess } from "./backends/claude.js";
+import { PiProcess } from "./backends/pi.js";
 import { handleCommand } from "./commands.js";
 import {
 	ConfigError,
@@ -91,14 +94,23 @@ const app = new App({
 // One SessionManager per project (each carries its own work_dir / mode / model).
 const managers = new Map<string, SessionManager>();
 for (const p of config.projects) {
+	const bin = p.agent === "pi" ? config.piBin : config.claudeBin;
+	const createProcess: (
+		opts: AgentOptions,
+		mode: PermissionMode,
+	) => AgentProcess =
+		p.agent === "pi"
+			? (opts, mode) => new PiProcess(opts, mode)
+			: (opts, mode) => new ClaudeProcess(opts, mode);
 	managers.set(
 		p.name,
 		new SessionManager({
-			bin: config.claudeBin,
+			bin,
 			workDir: p.workDir,
 			model: p.model,
 			appendSystemPrompt: APPEND_SYSTEM_PROMPT,
 			mode: p.permissionMode,
+			createProcess,
 			idleTtlMs: config.idleTtlMs,
 		}),
 	);
