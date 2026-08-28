@@ -81,4 +81,16 @@ describe("StreamBuffer", () => {
 		await buf.flush();
 		expect(buf.getMessageTs()).toBe("msg-ts-1");
 	});
+
+	it("raw chunk accumulation preserves inter-word spaces (Pi text_delta)", async () => {
+		// Token-level deltas carry surrounding spaces; appending RAW must keep
+		// them. The streaming path must NOT trim per chunk (that clobbered
+		// inter-word spaces for token streams such as Pi's text_delta).
+		const { poster, calls } = makePoster();
+		const buf = new StreamBuffer(poster, identity);
+		for (const c of ["I'm", " ready", " to", " help"]) buf.append(c);
+		await buf.flush();
+		expect(calls[0]!.args[0]).toBe("I'm ready to help");
+		expect(buf.getFullText()).toBe("I'm ready to help");
+	});
 });

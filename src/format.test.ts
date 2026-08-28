@@ -29,6 +29,23 @@ test("applyNoReply: only a marker mid-text is NOT stripped (must be trailing)", 
 	);
 });
 
+test("applyNoReply: NO_REPLY is judged on the FULL turn text, not per-delta", () => {
+	// Token-level streams (e.g. Pi's text_delta) deliver words with surrounding
+	// spaces. The correct pattern accumulates the RAW chunks, then trims /
+	// strips NO_REPLY once. Per-delta calling of applyNoReply stripped the
+	// inter-word spaces (the streaming-path bug this guards against).
+	const chunks = ["I'm ", "ready ", "to ", "help "];
+	const raw = chunks.join("");
+	expect(applyNoReply(raw)).toBe("I'm ready to help"); // spaces preserved
+
+	// The old per-delta pattern destroyed the spacing between words:
+	const perDelta = chunks
+		.map((c) => applyNoReply(c))
+		.filter((s): s is string => s !== null)
+		.join("");
+	expect(perDelta).toBe("I'mreadytohelp"); // spaces lost -> regression
+});
+
 test("toSlackMrkdwn: bold and headings", () => {
 	expect(toSlackMrkdwn("**bold**")).toBe("*bold*");
 	expect(toSlackMrkdwn("# Heading")).toBe("*Heading*");
