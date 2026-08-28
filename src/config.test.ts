@@ -4,11 +4,13 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import {
 	ConfigError,
+	composeLaunchdPath,
 	defaultConfigPath,
 	loadConfig,
 	resolveConfigPath,
 	routeChannel,
 	routeUser,
+	STANDARD_PATH_DIRS,
 } from "./config.js";
 
 const baseEnv = {
@@ -370,4 +372,56 @@ test("resolveConfigPath: finds repo-local ./iris.config.toml first", () => {
 	expect(resolveConfigPath({}, { cwd, home })).toBe(
 		join(cwd, "iris.config.toml"),
 	);
+});
+
+// ── composeLaunchdPath ────────────────────────────────────────────────────────
+// The bug under test: an installed (launchd) Iris service runs with a restricted
+// PATH, so `spawn("claude")` / `spawn("pi")` ENOENTs when the agent CLI lives in
+// a user-managed bin dir (nodenv / homebrew / ~/.local/bin / …). `iris install`
+// runs from the user's interactive shell, so we forward that shell's PATH.
+
+test("composeLaunchdPath forwards the inherited shell PATH (the fix)", () => {
+	// A version-manager dir like nodenv is where claude/pi live; a minimal
+	// hardcoded PATH would drop it and spawn would ENOENT.
+	const path = composeLaunchdPath(
+		"/opt/homebrew/bin",
+		"/Users/me/.anyenv/envs/nodenv/versions/24.20.0/bin:/opt/homebrew/bin",
+	);
+	expect(path).toContain("/Users/me/.anyenv/envs/nodenv/versions/24.20.0/bin");
+	expect(path).toContain("/usr/bin");
+});
+
+test("composeLaunchdPath always includes the standard dirs first", () => {
+	const path = composeLaunchdPath("/opt/homebrew/bin", "");
+	const entries = path.split(":");
+	// The standard set leads the PATH, in declared order.
+	expect(entries.slice(0, STANDARD_PATH_DIRS.length)).toEqual([
+		...STANDARD_PATH_DIRS,
+	]);
+});
+
+test("composeLaunchdPath de-duplicates entries (first occurrence wins)", () => {
+	const path = composeLaunchdPath("/opt/homebrew/bin", "/opt/homebrew/bin");
+	const homebrew = path.match(/\/opt\/homebrew\/bin/g) ?? [];
+	expect(homebrew.length).toBe(1);
+});
+
+test("composeLaunchdPath tolerates undefined inherited PATH", () => {
+	expect(() => composeLaunchdPath("/x", undefined)).not.toThrow();
+	expect(composeLaunchdPath("/x")).toContain("/x");
+});
+
+test("composeLaunchdPath places an extra binDir after the standard dirs", () => {
+	const path = composeLaunchdPath("/custom/bin");
+	const entries = path.split(":");
+	expect(entries[STANDARD_PATH_DIRS.length]).toBe("/custom/bin");
+});
+
+test("composeLaunchdPath drops empty segments (trailing/leading/double colons)", () => {
+	const path = composeLaunchdPath("", ":/opt/homebrew/bin::/usr/bin:");
+	expect(path.split(":")).not.toContain("");
+	// the inherited entries collapse into the standard set, no empties
+	expect(path.startsWith(":")).toBe(false);
+	expect(path.endsWith(":")).toBe(false);
+	expect(path).not.toContain("::");
 });
