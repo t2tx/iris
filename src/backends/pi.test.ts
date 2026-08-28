@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -217,6 +217,103 @@ describe("PiProcess session id", () => {
 			() => mgr.getSessionInfo("t1")?.sessionId === "pi-sess-456",
 		);
 		expect(ok).toBe(true);
+
+		mgr.closeAll();
+	});
+
+	// The reliable capture path: Pi never emits its session id on its own, so
+	// PiProcess pulls it via a get_state RPC right after spawn.
+	test("captures session id from get_state response (data.sessionId)", async () => {
+		const bin = createFakePi(
+			`printf '%s\\n' '${JSON.stringify({
+				type: "response",
+				command: "get_state",
+				success: true,
+				data: { sessionId: "pi-getstate-789" },
+			})}'`,
+		);
+		const mgr = new SessionManager({
+			bin,
+			workDir: process.cwd(),
+			mode: "auto",
+			createProcess: (opts, mode) => new PiProcess(opts, mode),
+		});
+
+		mgr.send("t1", "hi", noopHandlers);
+
+		const ok = await waitFor(
+			() => mgr.getSessionInfo("t1")?.sessionId === "pi-getstate-789",
+		);
+		expect(ok).toBe(true);
+
+		mgr.closeAll();
+	});
+
+	// After a killSession the entry (and its captured session id) is kept, so the
+	// next spawn must pass --session to resume the same conversation.
+	test("resumes via --session after killSession (session id survives)", async () => {
+		const logFile = join(mkdtempSync(join(tmpdir(), "iris-argv-")), "argv.log");
+		// Record argv (one line per spawn, appended) then emit a get_state
+		// response. $* joins positional args on a single line.
+		const resp = JSON.stringify({
+			type: "response",
+			command: "get_state",
+			success: true,
+			data: { sessionId: "resume-after-kill" },
+		});
+		const script = [
+			`printf '%s\\n' "$*" >> "${logFile}"`,
+			`printf '%s\\n' '${resp}'`,
+			"exec cat >/dev/null",
+		].join("\n");
+		const bin = createFakePi(script);
+		const mgr = new SessionManager({
+			bin,
+			workDir: process.cwd(),
+			mode: "auto",
+			createProcess: (opts, mode) => new PiProcess(opts, mode),
+		});
+
+		// Kill the process and wait for it to actually die; the entry + its
+		// captured session id are kept, so the next send resumes via --session.
+		let exited = false;
+		const killHandlers: ThreadHandlers = {
+			...noopHandlers,
+			onExit() {
+				exited = true;
+			},
+		};
+		mgr.send("t1", "first", killHandlers);
+		const captured = await waitFor(
+			() => mgr.getSessionInfo("t1")?.sessionId === "resume-after-kill",
+		);
+		expect(captured).toBe(true);
+
+		expect(mgr.killSession("t1")).toBe(true);
+		// Ensure the process has fully exited so the next send really respawns
+		// (otherwise ensure() reuses the still-alive process and no new spawn
+		// — carrying --session — occurs).
+		await waitFor(() => exited);
+		expect(mgr.getSessionInfo("t1")?.alive).toBe(false);
+
+		// Next message must respawn with --session <id>.
+		mgr.send("t1", "second", noopHandlers);
+		await waitFor(() => {
+			const lines = readFileSync(logFile, "utf8")
+				.split("\n")
+				.filter((s) => s.includes("--mode"));
+			const last = lines[lines.length - 1];
+			return Boolean(lines.length >= 2 && last?.includes("--session"));
+		});
+		expect(mgr.getSessionInfo("t1")?.alive).toBe(true);
+
+		const spawnLines = readFileSync(logFile, "utf8")
+			.split("\n")
+			.filter((s) => s.includes("--mode"));
+		// At least two spawns; the last one carries --session resume-after-kill.
+		expect(spawnLines.length).toBeGreaterThanOrEqual(2);
+		const lastSpawn = spawnLines[spawnLines.length - 1];
+		expect(lastSpawn).toContain("--session resume-after-kill");
 
 		mgr.closeAll();
 	});

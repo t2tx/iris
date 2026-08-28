@@ -91,6 +91,12 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 		if (opts.model) {
 			this.writeJSON({ type: "set_model", model: opts.model });
 		}
+
+		// Query the session id. Unlike Claude Code (which auto-emits a session id
+		// in a system event), Pi does NOT surface its session id on its own. We
+		// pull it via the get_state RPC right after spawn so SessionManager can
+		// resume the same conversation (--session) after a killSession / idle reap.
+		this.writeJSON({ type: "get_state" });
 	}
 
 	isAlive(): boolean {
@@ -233,10 +239,25 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 
 	/**
 	 * Handle a command response from Pi (e.g. session id, init confirmation).
-	 * Extracts the session id from `result.sessionId` or `result.session_id`
-	 * and emits a "session" event if it changed.
+	 * The get_state RPC supplies the session id via `data.sessionId` (Pi does
+	 * not auto-emit one); a fallback also reads `result.sessionId` / `session_id`.
+	 * Emits a "session" event if the id changed.
 	 */
 	private handleResponse(raw: Record<string, unknown>): void {
+		// get_state RPC (sent post-spawn): Pi returns the live session id in
+		// data.sessionId. This is the reliable capture path — Pi never emits a
+		// session id on its own, so without it resume would silently fail.
+		if (raw.command === "get_state" && raw.success === true) {
+			const data = raw.data as Record<string, unknown> | undefined;
+			const sid = typeof data?.sessionId === "string" ? data.sessionId : "";
+			if (sid && sid !== this.sessionId) {
+				this.sessionId = sid;
+				this.emit("session", sid);
+			}
+			return;
+		}
+
+		// Generic init/response carrying a session id in the result payload.
 		const result = raw.result as Record<string, unknown> | undefined;
 		if (!result) return;
 
