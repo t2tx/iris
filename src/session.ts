@@ -133,8 +133,16 @@ export class SessionManager {
 				entry.proc.close();
 				// Visibility: tell the thread its session was paused. The next message
 				// silently resumes it via --resume (see ensure()).
-				void entry.handlers.onNotice?.(
-					`⏸️ 無操作が${mins}分続いたためセッションを一時停止しました。次のメッセージで会話を再開します。`,
+				// Fire-and-forget: guard so a rejected notice (e.g. a post failure)
+				// can't surface as an unhandled promise rejection (session.ts idle reaper).
+				void Promise.resolve(
+					entry.handlers.onNotice?.(
+						`⏸️ 無操作が${mins}分続いたためセッションを一時停止しました。次のメッセージで会話を再開します。`,
+					),
+				).catch((err) =>
+					console.error(
+						`[session] notice delivery failed [${key}]: ${String((err as Error)?.message ?? err)}`,
+					),
 				);
 			}
 		}

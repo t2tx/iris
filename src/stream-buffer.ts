@@ -80,6 +80,14 @@ export class StreamBuffer {
 			} else {
 				await this.poster.update(this.messageTs, display);
 			}
+		} catch (err) {
+			// Swallow-and-log: fire-and-forget callers (onText via append, the
+			// scheduleUpdate timer's `void pushToSlack`) would otherwise surface a
+			// failed post as an unhandled promise rejection. A failed post leaves
+			// the turn's bubble absent but must not flood the event loop.
+			console.error(
+				`[stream-buffer] push failed: ${String((err as Error)?.message ?? err)}`,
+			);
 		} finally {
 			this.flushing = false;
 		}
