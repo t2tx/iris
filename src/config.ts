@@ -52,6 +52,15 @@ const PERMISSION_MODES: readonly PermissionMode[] = [
 	"auto",
 ];
 
+/**
+ * Which agent backend a session runs. `claude` is the default (backward
+ * compatible); `pi` selects the Pi coding-agent backend. A top-level `agent`
+ * sets the default and each `[[projects]]` may override it.
+ */
+export type AgentKind = "claude" | "pi";
+
+const AGENT_KINDS: readonly AgentKind[] = ["claude", "pi"];
+
 export interface ProjectConfig {
 	name: string;
 	workDir: string;
@@ -59,12 +68,16 @@ export interface ProjectConfig {
 	allowUsers: string[];
 	permissionMode: PermissionMode;
 	model?: string;
+	/** Which agent backend this project spawns (default: claude). */
+	agent: AgentKind;
 }
 
 export interface IrisConfig {
 	botToken: string;
 	appToken: string;
 	claudeBin: string;
+	/** Path to the Pi CLI (used when a project selects agent = "pi"). */
+	piBin: string;
 	logLevel: LogLevel;
 	/** Max chars of a Bash command shown in the tool-progress line. */
 	bashProgressMax: number;
@@ -85,10 +98,13 @@ interface RawProject {
 	allow_users?: unknown;
 	permission_mode?: unknown;
 	model?: unknown;
+	agent?: unknown;
 }
 interface RawConfig {
 	slack?: { bot_token?: unknown; app_token?: unknown };
 	claude_bin?: unknown;
+	pi_bin?: unknown;
+	agent?: unknown;
 	model?: unknown;
 	permission_mode?: unknown;
 	log_level?: unknown;
@@ -110,16 +126,19 @@ export function loadConfig(opts?: {
 	// (handy for CI / secret managers). Everything else is TOML-only.
 	const { botToken, appToken } = resolveTokens(env, raw);
 	const claudeBin = str(raw.claude_bin) || "claude";
+	const piBin = str(raw.pi_bin) || "pi";
 	const defaultMode = parseMode(str(raw.permission_mode) || "manual");
+	const defaultAgent = parseAgent(str(raw.agent) || "claude");
 	const defaultModel = str(raw.model) || undefined;
 	const logLevel = parseLogLevel(str(raw.log_level) || "info");
 	const bashProgressMax = parsePositiveInt(raw.bash_progress_max, 800);
 	const idleTtlMs = resolveIdleTtlMs(env, raw);
-	const projects = parseProjects(raw, defaultMode, defaultModel);
+	const projects = parseProjects(raw, defaultMode, defaultModel, defaultAgent);
 	return {
 		botToken,
 		appToken,
 		claudeBin,
+		piBin,
 		logLevel,
 		bashProgressMax,
 		idleTtlMs,
@@ -183,6 +202,7 @@ function parseProjects(
 	raw: RawConfig,
 	defaultMode: PermissionMode,
 	defaultModel: string | undefined,
+	defaultAgent: AgentKind,
 ): ProjectConfig[] {
 	if (!Array.isArray(raw.projects) || raw.projects.length === 0) {
 		throw new ConfigError(
@@ -190,7 +210,13 @@ function parseProjects(
 		);
 	}
 	return raw.projects.map((p, i) =>
-		normalizeProject(p as RawProject, i, defaultMode, defaultModel),
+		normalizeProject(
+			p as RawProject,
+			i,
+			defaultMode,
+			defaultModel,
+			defaultAgent,
+		),
 	);
 }
 
@@ -265,6 +291,7 @@ function normalizeProject(
 	index: number,
 	defaultMode: PermissionMode,
 	defaultModel: string | undefined,
+	defaultAgent: AgentKind,
 ): ProjectConfig {
 	const name = str(p.name) || `project-${index}`;
 	const workDir = str(p.work_dir);
@@ -279,6 +306,7 @@ function normalizeProject(
 			? parseMode(str(p.permission_mode))
 			: defaultMode,
 		model: str(p.model) || defaultModel,
+		agent: p.agent ? parseAgent(str(p.agent)) : defaultAgent,
 	};
 }
 
@@ -287,6 +315,12 @@ function parseMode(v: string): PermissionMode {
 		return v as PermissionMode;
 	throw new ConfigError(
 		`invalid permission_mode "${v}" (expected: ${PERMISSION_MODES.join(", ")})`,
+	);
+}
+function parseAgent(v: string): AgentKind {
+	if ((AGENT_KINDS as readonly string[]).includes(v)) return v as AgentKind;
+	throw new ConfigError(
+		`invalid agent "${v}" (expected: ${AGENT_KINDS.join(", ")})`,
 	);
 }
 

@@ -92,6 +92,77 @@ permission_mode = "acceptEdits"
 	expect(cfg.projects[1]!.permissionMode).toBe("acceptEdits"); // overridden
 });
 
+test("agent: defaults to claude when unset", () => {
+	const path = writeToml(`
+[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+	const cfg = loadConfig({ path, env: baseEnv });
+	expect(cfg.projects[0]!.agent).toBe("claude");
+});
+
+test("agent: top-level default applies, project overrides it", () => {
+	const path = writeToml(`agent = "pi"
+
+[[projects]]
+name = "a"
+work_dir = "/a"
+
+[[projects]]
+name = "b"
+work_dir = "/b"
+agent = "claude"
+`);
+	const cfg = loadConfig({ path, env: baseEnv });
+	expect(cfg.projects[0]!.agent).toBe("pi"); // inherits top-level
+	expect(cfg.projects[1]!.agent).toBe("claude"); // overridden
+});
+
+test("agent: accepts pi", () => {
+	const path = writeToml(`agent = "pi"
+
+[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+	expect(loadConfig({ path, env: baseEnv }).projects[0]!.agent).toBe("pi");
+});
+
+test("pi_bin: defaults to pi, TOML sets it", () => {
+	const base = writeToml(`[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+	expect(loadConfig({ path: base, env: baseEnv }).piBin).toBe("pi");
+
+	const custom = writeToml(`pi_bin = "pi-cli"
+[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+	expect(loadConfig({ path: custom, env: baseEnv }).piBin).toBe("pi-cli");
+});
+
+test("invalid top-level agent throws ConfigError", () => {
+	const path = writeToml(`agent = "yolo"
+
+[[projects]]
+name = "p"
+work_dir = "/w"
+`);
+	expect(() => loadConfig({ path, env: baseEnv })).toThrow(ConfigError);
+});
+
+test("invalid per-project agent throws ConfigError", () => {
+	const path = writeToml(`[[projects]]
+name = "p"
+work_dir = "/w"
+agent = "yolo"
+`);
+	expect(() => loadConfig({ path, env: baseEnv })).toThrow(ConfigError);
+});
+
 test("TOML: env tokens fill in when [slack] omitted", () => {
 	const path = writeToml(`
 [[projects]]

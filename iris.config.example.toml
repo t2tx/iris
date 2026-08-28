@@ -13,6 +13,8 @@
 # テーブル見出しより「前」に書く必要があります（後ろに書くとそのテーブルの
 # 中のキーと解釈され、効きません）。
 claude_bin = "claude"          # claude CLI のパス（PATH にあれば claude のままで可）
+# agent = "claude"            # claude | pi（既定 claude、各プロジェクトで上書き可）
+# pi_bin = "pi"                # Pi CLI のパス（PATH にあれば pi のままで可、agent = "pi" のとき使用）
 permission_mode = "manual"     # manual（毎回確認）| acceptEdits | auto（全自動）
 log_level = "info"             # debug | info | warn | error（既定 info）
 # bash_progress_max = 800      # 進捗表示の Bash コマンドの最大文字数（既定 800、正の整数）
@@ -39,3 +41,4 @@ allow_users = ["U09XXXXXXX"]       # このユーザーからの DM
 # work_dir = "/path/to/another/repo"
 # allow_users = ["U09XXXXXXX"]
 # permission_mode = "acceptEdits"  # 編集系は自動許可（個別上書き）
+# agent = "pi"                  # pi を使う場合は pi（デフォルトは claude）
