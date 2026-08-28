@@ -234,9 +234,11 @@ function handlersFor(
 
 	return {
 		onText: (text) => {
-			const delivered = applyNoReply(text);
-			if (delivered === null) return;
-			getStream().append(delivered);
+			// Accumulate the RAW chunk. NO_REPLY is judged once on the FULL
+			// turn text in onResult; per-delta judging cannot fire mid-stream
+			// and applyNoReply's trailing trim strips inter-word spaces
+			// (this clobbers token-level streams such as Pi's text_delta).
+			getStream().append(text);
 		},
 		onNotice: async (text) => {
 			// Out-of-band status (e.g. idle-reaper pause / resume). Flush any active
@@ -264,8 +266,24 @@ function handlersFor(
 				post,
 			),
 		onResult: async (_raw, usage) => {
+			// Judge NO_REPLY on the FULL accumulated text, not per-delta
+			// (per-delta judging cannot fire mid-stream and trims inter-word
+			// spaces). Capture the streamed bubble's ts before flushing so a
+			// pure-NO_REPLY turn can be silenced by deleting it after streaming.
+			const postedTs = activeStreams.get(sessionKey)?.getMessageTs() ?? null;
 			const fullText = await flushStream(sessionKey);
-			if (fullText) await uploadDetected(fullText, channel, threadTs);
+			if (applyNoReply(fullText) === null) {
+				// Whole turn was a NO_REPLY marker (or empty) -> stay silent.
+				if (postedTs) {
+					try {
+						await app.client.chat.delete({ channel, ts: postedTs });
+					} catch (err) {
+						log.error(`NO_REPLY delete failed: ${(err as Error).message}`);
+					}
+				}
+			} else if (fullText) {
+				await uploadDetected(fullText, channel, threadTs);
+			}
 			if (usage) {
 				const footer = usageFooter(usage);
 				if (footer) await post({ text: footer });
