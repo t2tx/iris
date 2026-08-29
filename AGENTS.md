@@ -52,8 +52,8 @@ Slack のスレッドから、ローカルで動く agent プロセスを操作�
 | `src/cli.ts` | CLI エントリポイント（`iris` / `iris install` / `iris status` / `iris config`） |
 | `src/commands.ts` | Slack スラッシュコマンド処理（`/help` / `/sessions` / `/clear` 等） |
 | `src/claude-sessions.ts` | Claude の `~/.claude/` セッションスキャン・一覧 |
-| `src/attachments.ts` | 添付ファイル処理（画像・ファイル） |
-| `src/file-upload.ts` | 生成ファイルを Slack へアップロード |
+| `src/attachments.ts` | 添付ファイル処理（入向: 画像・ファイルの保存／出向: outbox 規約） |
+| `src/file-upload.ts` | outbox のファイルを Slack へアップロード（転送後削除） |
 | `src/stream-buffer.ts` | ストリーム出力のバッファリング・分割 |
 | `src/dedup.ts` | 重複検出（同一メッセージの再処理防止） |
 | `src/log.ts` | レベル付きロガー |
@@ -146,11 +146,23 @@ claude --output-format stream-json --input-format stream-json \
 
 `auto` / `acceptEdits` の自動許可は `backends/claude.ts` 内で Slack を経由せず即応答する。
 
+## ファイル転送の規約（出向: agent → Slack）
+
+転送したいファイルは **本文へのパス記述ではなく、outbox へ置く**ことで確定転送される。
+Claude・Pi いずれの backend でも同じ契約（後端の差分なし）。
+
+- **outbox**: `<work_dir>/.iris/outbox/`（受信インボックス `attachments/` とは別ディレクトリ）。
+- 転送は **この outbox の現存ファイルだけ**を転送し、転送後に削除する（一時キュー）。
+- 返信本文に絶対パスを書いても、ファイルの中身を貼り付けても転送されない
+  （旧来の「本文からパス拾い」ヒューリスティックは廃止。#79 で根治）。
+- この規約は agent へ `--append-system-prompt`（`src/index.ts` の `buildSystemPrompt`）で
+  周知されるので、設定は不要。
+
 ## セキュリティ方針（内製の主目的）
 
 1. **デフォルト拒否**: `allow_channels` / `allow_users` が空なら無視する。
 2. **権限の既定は手動承認**: `auto` は明示的に opt-in したときのみ。
-3. **外向き機能を持たない**: cron / relay / provider 切替 / 添付送信などは未実装。攻撃面は「Slack 受信 → agent CLI 実行」のみ。
+3. **外向き転送は outbox 限定**: cron / relay / provider 切替 / 汎用リレーなどは未実装。出方向の唯一の転送は「ファイルの outbox 転送」で、本文走査ではなく `<work_dir>/.iris/outbox/` の現存ファイルを転送して削除する（下段を参照）。攻撃面は「Slack 受信 → agent CLI 実行 → outbox 転送」のみ。
 4. **設定は TOML 一本**（`iris.config.toml` / `~/.iris-slack/config.toml`、トークン込み）。コードやリポジトリに秘密を置かない（`iris.config.toml` は gitignore、`iris.config.example.toml` はプレースホルダのみ）。`.env` は使わない。
 
 ## ビルド・テスト・lint

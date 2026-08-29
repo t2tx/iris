@@ -3,13 +3,40 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * attachments.ts — inbound file/image handling (user → Claude).
+ * attachments.ts — file/image handling around a session's `.iris` dir.
  *
- * Slack messages may carry files. Images are sent to Claude as base64 in the
- * multimodal content array (Claude "sees" them); other files are saved to disk
- * and referenced by path so Claude can Read them. Mirrors cc-connect's
- * agent/claudecode/session.go Send().
+ * Inbound (user → Claude): Slack messages may carry files. Images are sent to
+ * Claude as base64 in the multimodal content array (Claude "sees" them); other
+ * files are saved to disk and referenced by path so Claude can Read them.
+ * Mirrors cc-connect's agent/claudecode/session.go Send().
+ *
+ * Outbound (Claude/Pi → Slack): the inverse — a file the agent wants to send to
+ * the user is written under <workDir>/.iris/outbox (outboxDir below), which
+ * file-upload.ts uploads and removes. Inbound (.iris/attachments) and outbound
+ * (.iris/outbox) live in sibling directories so they never collide.
  */
+
+/**
+ * The outbound outbox a project's agent drops files in to send them to Slack.
+ * One directory per project's work_dir. Kept under `.iris` next to the incoming
+ * attachments dir so the two are visually parallel and never collide.
+ *
+ * Both backends share this contract: the agent writes a file here, Iris uploads
+ * it and deletes it. No path scanning of the reply text is involved — this is
+ * the only transfer path (see APPEND_SYSTEM_PROMPT in index.ts).
+ */
+export function outboxDir(workDir: string): string {
+	return join(workDir, ".iris", "outbox");
+}
+
+/**
+ * Create a project's outbox directory. No-op if it already exists.
+ */
+export function ensureOutboxDir(workDir: string): string {
+	const dir = outboxDir(workDir);
+	mkdirSync(dir, { recursive: true });
+	return dir;
+}
 
 export interface Attachment {
 	name: string;

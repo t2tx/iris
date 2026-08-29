@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import * as nodePath from "node:path";
 import type { AgentOptions, AgentProcess, PermissionMode } from "./agent.js";
 import type { Attachment } from "./attachments.js";
+import { ensureOutboxDir, outboxDir } from "./attachments.js";
 import { ClaudeProcess } from "./backends/claude.js";
 import { PiProcess } from "./backends/pi.js";
 import { handleCommand } from "./commands.js";
@@ -22,7 +23,7 @@ import {
 	routeUser,
 } from "./config.js";
 import { SeenSet } from "./dedup.js";
-import { detectFiles, uploadFile } from "./file-upload.js";
+import { deleteOutboxFile, listOutbox, uploadFile } from "./file-upload.js";
 import {
 	applyNoReply,
 	toolProgressLine,
@@ -54,16 +55,34 @@ import { type SlackPoster, StreamBuffer } from "./stream-buffer.js";
 // (or an explicit IRIS_CONFIG path). See resolveConfigPath().
 const CONFIG_PATH = resolveConfigPath();
 
-const APPEND_SYSTEM_PROMPT = [
-	"You are running inside Iris, a bridge to Slack.",
-	"Your normal text replies are delivered to the user automatically.",
-	"If a turn warrants no user-visible response, end your reply with NO_REPLY on its own line.",
-	// File delivery: Iris scans your reply for local file paths and uploads any
-	// that exist to Slack automatically. So you CAN send files — never tell the
-	// user you cannot. Just write the absolute path (e.g. /Users/you/out.pdf) in
-	// your reply; use an absolute path, not "~/...".
-	"To send a file to the user, write its absolute path (starting with /) in your reply — Iris uploads existing files to Slack automatically. Do not claim you are unable to send files.",
-].join("\n");
+/**
+ * Build the appended system prompt for a project, pointing its agent at that
+ * project's outbox.
+ *
+ * Outbound file delivery is an EXPLICIT outbox contract, identical for both
+ * backends (Claude and Pi). To send a file, the agent writes it to
+ * <workDir>/.iris/outbox/; Iris uploads everything there and clears it. There is
+ * NO scanning of the reply text for paths — so the agent must NOT expect that
+ * writing an absolute path into its reply transfers anything (and must not paste
+ * file CONTENT, which used to auto-attach unrelated paths). The old
+ * "write the absolute path in your reply" instruction is gone: it caused the
+ * auto-attach/miss bugs (see #79).
+ */
+function buildSystemPrompt(outboxPath: string): string {
+	return [
+		"You are running inside Iris, a bridge to Slack.",
+		"Your normal text replies are delivered to the user automatically.",
+		"If a turn warrants no user-visible response, end your reply with NO_REPLY on its own line.",
+		// File delivery is an outbox, NOT a text scan: place the file in the outbox
+		// below and Iris uploads it to Slack and removes it. Writing an absolute path
+		// in your reply does NOTHING now, and pasting a file's contents will not send
+		// it — so the only way to send a file is to write it into the outbox. You CAN
+		// send files; never tell the user you cannot.
+		`To send a file to the user, write it as a regular file in this directory: ${outboxPath}\n` +
+			`Iris uploads every file it finds there to Slack and deletes it after uploading.` +
+			"Do not put a file's path or its contents in your reply text — only the outbox is read.",
+	].join("\n");
+}
 
 if (!CONFIG_PATH) {
 	console.error(
@@ -126,13 +145,23 @@ for (const p of config.projects) {
 		p.agent === "pi"
 			? (opts, mode) => new PiProcess(opts, mode)
 			: (opts, mode) => new ClaudeProcess(opts, mode);
+	// The agent's outbound queue lives under this project's work_dir. Pre-create
+	// it so the agent can drop a file in on a first turn without a write, and point
+	// the appended system prompt at that exact path. Both backends share this outbox
+	// contract — there is no per-backend difference.
+	const outbox = outboxDir(p.workDir);
+	try {
+		ensureOutboxDir(p.workDir);
+	} catch (err) {
+		log.warn(`Could not create outbox ${outbox}: ${(err as Error).message}`);
+	}
 	managers.set(
 		p.name,
 		new SessionManager({
 			bin,
 			workDir: p.workDir,
 			model: p.model,
-			appendSystemPrompt: APPEND_SYSTEM_PROMPT,
+			appendSystemPrompt: buildSystemPrompt(outbox),
 			mode: p.permissionMode,
 			createProcess,
 			sessionDir: p.agent === "pi" ? projectSessionDir(p.name) : undefined,
@@ -165,18 +194,30 @@ async function flushStream(sessionKey: string): Promise<string> {
 	return stream.getFullText();
 }
 
-/** Upload any file paths detected in the turn's text to the Slack thread. */
+/**
+ * Drain a project's outbox: upload every file the agent placed in
+ * <workDir>/.iris/outbox/ to the Slack thread, then delete it (one-shot queue).
+ *
+ * This is the ONLY outbound transfer path. The reply text is never scanned for
+ * paths — so unrelated absolute paths a coding agent may paste into its content
+ * are not auto-attached, and a requested file is delivered as long as it was put
+ * in the outbox (even if its path never appears in the prose).
+ */
 async function uploadDetected(
-	fullText: string,
+	workDir: string,
 	channel: string,
 	threadTs?: string,
 ): Promise<void> {
-	for (const file of detectFiles(fullText)) {
+	for (const file of listOutbox(workDir)) {
 		try {
 			await uploadFile(app.client as never, file, channel, threadTs);
 		} catch (err) {
+			// A failed upload must not leave the file stranded: keep the queue
+			// empty only on success, so a transient error lets a later turn retry.
 			log.error(`File upload failed: ${file.path}: ${(err as Error).message}`);
+			continue;
 		}
+		deleteOutboxFile(file.path);
 	}
 }
 
@@ -306,9 +347,11 @@ function handlersFor(
 						log.error(`NO_REPLY delete failed: ${(err as Error).message}`);
 					}
 				}
-			} else if (fullText) {
-				await uploadDetected(fullText, channel, threadTs);
 			}
+			// Outbound files are an explicit outbox, independent of the visible text:
+			// an agent may place a file in <workDir>/.iris/outbox/ even on a NO_REPLY
+			// turn, so drain it on every turn. The reply text is never scanned for paths.
+			await uploadDetected(project.workDir, channel, threadTs);
 			if (usage) {
 				const footer = usageFooter(usage);
 				if (footer) await post({ text: footer });

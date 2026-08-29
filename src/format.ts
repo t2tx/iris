@@ -46,19 +46,35 @@ export function toolProgressLine(
 }
 
 // Per-tool extractors for the most useful field(s) of a tool's input.
+//
+// Keys cover BOTH Claude's PascalCase tool names (Read/Edit/Write, …) and Pi's
+// lowercase tool names (read/write/edit, …): Pi emits lowercase, so without them
+// the 🛠️ progress line for a Pi tool lost its path detail.
+const fileExtractor = (o: Record<string, unknown>) => str(o["file_path"]);
+const pathExtractor = (o: Record<string, unknown>) =>
+	joinParts(str(o["pattern"]), str(o["path"]));
+
 const EXTRACTORS: Record<string, (o: Record<string, unknown>) => string> = {
-	Read: (o) => str(o["file_path"]),
-	Edit: (o) => str(o["file_path"]),
-	Write: (o) => str(o["file_path"]),
-	MultiEdit: (o) => str(o["file_path"]),
+	Read: fileExtractor,
+	Edit: fileExtractor,
+	Write: fileExtractor,
+	MultiEdit: fileExtractor,
 	NotebookEdit: (o) => str(o["notebook_path"]),
-	Grep: (o) => joinParts(str(o["pattern"]), str(o["path"])),
-	Glob: (o) => joinParts(str(o["pattern"]), str(o["path"])),
+	Grep: pathExtractor,
+	Glob: pathExtractor,
 	Task: (o) => joinParts(str(o["subagent_type"]), str(o["description"])),
 	WebFetch: (o) => str(o["url"]),
 	WebSearch: (o) => str(o["query"]),
 	TodoWrite: (o) =>
 		Array.isArray(o["todos"]) ? `${o["todos"].length} item(s)` : "",
+	// Pi's lowercase tool names share the same input shapes.
+	read: fileExtractor,
+	edit: fileExtractor,
+	write: fileExtractor,
+	multi_edit: fileExtractor,
+	notebook_edit: (o) => str(o["notebook_path"]),
+	grep: pathExtractor,
+	glob: pathExtractor,
 };
 
 function summarizeInput(

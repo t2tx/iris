@@ -1,29 +1,28 @@
 /**
- * file-upload.ts — detects local file paths in Claude's text output and
- * uploads them to Slack via files.uploadV2.
+ * file-upload.ts — uploads the files an agent placed in its outbox to Slack via
+ * files.uploadV2.
  *
- * Heuristic: look for absolute paths (starting with / or ~/) that point to an
- * existing regular file. Any file type is uploaded — source files (.ts, .py, …)
- * as well as documents/images — so "send me the file" just works. (Earlier this
- * had an extension allow-list that excluded source code, so Claude would write
- * a path expecting it to be uploaded, but nothing was attached.)
+ * Outbound file delivery is an EXPLICIT contract, not a heuristic: to send a file
+ * to the user, an agent writes it under <workDir>/.iris/outbox/ (see
+ * attachments.outboxDir / APPEND_SYSTEM_PROMPT). Iris uploads every existing file
+ * found there and then deletes it (a one-shot queue). This is the only transfer
+ * path — there is no longer any scanning of the reply text for paths.
+ *
+ * Scanning reply text (the old detectFiles) misbehaved on every backend: a coding
+ * agent that dumps a file's CONTENT into its reply would (a) miss the requested
+ * file when its own path never appears in prose, and (b) auto-attach every
+ * unrelated absolute path that happened to appear inside the dumped content. Both
+ * are gone now: only the outbox is transferred.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, join } from "node:path";
-
-/**
- * Match local file paths in text: absolute (`/...`) or home-relative (`~/...`),
- * with or without an extension. Claude often writes the latter, so we accept
- * both and expand `~/` below.
- */
-const PATH_PATTERN = /(?:^|\s|`)((?:~\/|\/)[\w./-]+)/gm;
-
-/** Expand a leading `~/` to the user's home directory. */
-function expandHome(p: string): string {
-	return p.startsWith("~/") ? join(homedir(), p.slice(2)) : p;
-}
+import {
+	existsSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+} from "node:fs";
+import { join } from "node:path";
 
 export interface DetectedFile {
 	path: string;
@@ -31,27 +30,33 @@ export interface DetectedFile {
 }
 
 /**
- * Scan text for local paths that point to an existing regular file. Any file
- * type is accepted. Returns a deduplicated list. Directories are skipped.
+ * Enumerate the outbox for a working directory: <workDir>/.iris/outbox.
+ * The inbound inbox (<workDir>/.iris/attachments, see #77) is a different
+ * directory, so the two never collide. Returns [] when the outbox is absent.
  */
-export function detectFiles(text: string): DetectedFile[] {
-	const seen = new Set<string>();
-	const results: DetectedFile[] = [];
-
-	for (const match of text.matchAll(PATH_PATTERN)) {
-		// Trim a trailing backtick/punctuation the greedy class may have caught.
-		const raw = match[1]!.replace(/[`.,)]+$/, "");
-		const filePath = expandHome(raw);
-		if (seen.has(filePath)) continue;
-		seen.add(filePath);
-
-		if (!existsSync(filePath)) continue;
-		if (!statSync(filePath).isFile()) continue; // skip directories
-
-		results.push({ path: filePath, name: basename(filePath) });
+export function listOutbox(workDir: string): DetectedFile[] {
+	const outboxDir = join(workDir, ".iris", "outbox");
+	if (!existsSync(outboxDir)) return [];
+	const out: DetectedFile[] = [];
+	for (const entry of readdirSync(outboxDir, { withFileTypes: true })) {
+		if (!entry.isFile()) continue; // skip subdirectories
+		const path = join(outboxDir, entry.name);
+		// Guard against a race between readdir and stat.
+		if (existsSync(path) && statSync(path).isFile()) {
+			out.push({ path, name: entry.name });
+		}
 	}
+	return out;
+}
 
-	return results;
+/** Remove a freshly-uploaded outbox file (the outbox is a one-shot queue). */
+export function deleteOutboxFile(path: string): void {
+	try {
+		rmSync(path);
+	} catch {
+		// A vanished file (already removed) or a transient error must not abort
+		// the rest of the queue's uploads.
+	}
 }
 
 /**

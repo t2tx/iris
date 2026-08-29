@@ -65,6 +65,20 @@ test("toolProgressLine: summarizes known tools", () => {
 	);
 });
 
+test("toolProgressLine: Pi's lowercase tool names surface their path", () => {
+	// Pi emits lowercase tool names (read/write/edit, …); they share Claude's
+	// input shapes, so the 🛠️ line must still show the file path.
+	expect(toolProgressLine("read", { file_path: "/x/y.ts" })).toMatch(
+		/read — \/x\/y\.ts/,
+	);
+	expect(toolProgressLine("write", { file_path: "/x/z.md" })).toMatch(
+		/write — \/x\/z\.md/,
+	);
+	expect(toolProgressLine("edit", { file_path: "/x/e.ts" })).toMatch(
+		/edit — \/x\/e\.ts/,
+	);
+});
+
 test("toolProgressLine: unknown tool with no usable input has no detail", () => {
 	expect(toolProgressLine("Mystery", {}).includes("—")).toBe(false);
 });
