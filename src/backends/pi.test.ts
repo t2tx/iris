@@ -1,4 +1,11 @@
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -651,6 +658,114 @@ describe("PiProcess in SessionManager", () => {
 		expect(ok).toBe(true);
 
 		mgr.closeAll();
+	});
+});
+
+// ── Inbound attachments (images / files) ────────────────────────────────────
+
+/**
+ * Capture the `prompt` payload the backend writes to the child's stdin so we
+ * can assert its exact shape. The fake binary emits a get_state response first
+ * (so the session id lands); we then poll the log for the prompt before closeAll().
+ */
+describe("PiProcess attachments", () => {
+	async function runWithStdin(
+		attachments: { name: string; mimeType: string; data: Buffer }[],
+		workDir = process.cwd(),
+	): Promise<Record<string, unknown>> {
+		const binDir = mkdtempSync(join(tmpdir(), "iris-fakepi-"));
+		const stdinPath = join(binDir, "stdin.log");
+
+		// Emit the get_state response FIRST so the session id lands, then drain
+		// stdin to a log file. `cat` blocks on stdin, so the response must precede
+		// it; closeAll() ends stdin so the child flushes and exits.
+		const resp = JSON.stringify({
+			type: "response",
+			command: "get_state",
+			success: true,
+			data: { sessionId: "attach-sess" },
+		});
+		const script = [`printf '%s\\n' '${resp}'`, `cat > "${stdinPath}"`].join(
+			"\n",
+		);
+		const bin = createFakePi(script);
+		const mgr = new SessionManager({
+			bin,
+			workDir,
+			mode: "auto",
+			createProcess: (opts, mode) => new PiProcess(opts, mode),
+		});
+
+		mgr.send("t1", "prompt with attachments", noopHandlers, attachments);
+		await waitFor(() => mgr.getSessionInfo("t1")?.sessionId === "attach-sess");
+		// Poll the log until the prompt body lands, *before* closeAll(): the
+		// SIGTERM that ends the child can kill the blocking `cat` redirect before
+		// it flushes, and reading after closeAll() truncates the log.
+		const landed = await waitFor(() => {
+			if (!existsSync(stdinPath)) return false;
+			return readFileSync(stdinPath, "utf8").includes('"type":"prompt"');
+		});
+		expect(landed).toBe(true);
+		const raw = existsSync(stdinPath)
+			? readFileSync(stdinPath, "utf8").split("\n").filter(Boolean)
+			: [];
+		mgr.closeAll();
+		const promptLine = raw.find((l) => l.includes("prompt"));
+		if (promptLine === undefined)
+			throw new Error("prompt not captured on stdin");
+		return JSON.parse(promptLine) as Record<string, unknown>;
+	}
+
+	test("routes image as a separate images field with a string message", async () => {
+		const prompt = await runWithStdin([
+			{
+				name: "shot.png",
+				mimeType: "image/png",
+				data: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+			},
+		]);
+		// message must be a plain string (Pi runs text.startsWith on it).
+		expect(typeof prompt.message).toBe("string");
+		expect(Array.isArray(prompt.message)).toBe(false);
+		// Images travel in a separate field in Pi's ImageContent shape.
+		const images = prompt.images as Array<Record<string, unknown>>;
+		expect(Array.isArray(images)).toBe(true);
+		expect(images.length).toBe(1);
+		expect(images[0]?.type).toBe("image");
+		expect(images[0]?.mimeType).toBe("image/png");
+		expect(typeof images[0]?.data).toBe("string");
+		// followUp lets a prompt land mid-stream.
+		expect(prompt.streamingBehavior).toBe("followUp");
+	});
+
+	test("non-image file is saved to .iris/attachments and referenced in message", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "iris-piw-"));
+		const prompt = await runWithStdin(
+			[
+				{
+					name: "report.pdf",
+					mimeType: "application/pdf",
+					data: Buffer.from("hello"),
+				},
+				{
+					name: "shot.png",
+					mimeType: "image/png",
+					data: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+				},
+			],
+			workDir,
+		);
+		// The image went to the separate images field.
+		const images = prompt.images as Array<Record<string, unknown>>;
+		expect(images.length).toBe(1);
+		expect(images[0]?.mimeType).toBe("image/png");
+		// The file path is referenced in the string message.
+		expect(typeof prompt.message).toBe("string");
+		expect(String(prompt.message)).toContain("report.pdf");
+		// The file is actually on disk under <workDir>/.iris/attachments.
+		const saved = readdirSync(join(workDir, ".iris", "attachments"));
+		expect(saved.length).toBe(1);
+		expect(saved[0] ?? "").toContain("report.pdf");
 	});
 });
 
