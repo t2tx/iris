@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -158,9 +159,15 @@ export function buildPiPrompt(
 			});
 			return;
 		}
-		// Non-image: persist to disk and reference by path.
+		// Non-image: persist to disk and reference by path. The token keeps
+		// filenames collision-free so two concurrent send() calls at the same
+		// index/now cannot overwrite each other.
 		const safe = att.name.replace(/[^\w.-]/g, "_") || `file_${now}_${i}`;
-		const fpath = join(ensureDir(), `${now}_${i}_${safe}${suffix(att, safe)}`);
+		const token = randomInt(0, 0x1000000).toString(36);
+		const fpath = join(
+			ensureDir(),
+			`${now}_${i}_${token}_${safe}${suffix(att, safe)}`,
+		);
 		writeFileSync(fpath, att.data);
 		savedFilePaths.push(fpath);
 	});
