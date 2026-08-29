@@ -29,6 +29,16 @@ export interface AgentOptions {
 	resume?: string;
 	/** appended to --append-system-prompt */
 	appendSystemPrompt?: string;
+	/**
+	 * Per-session storage directory for backends that support an explicit
+	 * session dir (e.g. Pi's `--session-dir`). When set, session files are
+	 * written here instead of the backend's default global location, so a
+	 * resumed session is loaded only from this directory and other projects'
+	 * sessions cannot be discovered by `--session` lookup. (Note: does NOT
+	 * sandbox bash — Pi's bash can still `ls` the dir. For full isolation,
+	 * use a per-session HOME.)
+	 */
+	sessionDir?: string;
 }
 
 /**

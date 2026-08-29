@@ -3,6 +3,9 @@ import * as bolt from "@slack/bolt";
 
 const { App, LogLevel } = bolt;
 
+import * as nodeFs from "node:fs";
+import { homedir } from "node:os";
+import * as nodePath from "node:path";
 import type { AgentOptions, AgentProcess, PermissionMode } from "./agent.js";
 import type { Attachment } from "./attachments.js";
 import { ClaudeProcess } from "./backends/claude.js";
@@ -92,6 +95,27 @@ const app = new App({
 });
 
 // One SessionManager per project (each carries its own work_dir / mode / model).
+// Each project's agent gets a dedicated session-storage directory under
+// ~/.iris-slack/session-dir/<project-name> so that, for the Pi backend,
+// `--session` lookups are scoped to that directory and a resumed session
+// cannot accidentally match another project's file. This is a scoping
+// measure, NOT a bash sandbox (Pi's bash tool can still `ls` the dir).
+// See backends/pi.ts for the flag wiring.
+function projectSessionDir(projectName: string): string {
+	const dir = nodePath.join(
+		homedir(),
+		".iris-slack",
+		"session-dir",
+		projectName,
+	);
+	try {
+		nodeFs.mkdirSync(dir, { recursive: true });
+	} catch (err) {
+		log.warn(`Could not create session dir ${dir}: ${(err as Error).message}`);
+	}
+	return dir;
+}
+
 const managers = new Map<string, SessionManager>();
 for (const p of config.projects) {
 	const bin = p.agent === "pi" ? config.piBin : config.claudeBin;
@@ -111,6 +135,7 @@ for (const p of config.projects) {
 			appendSystemPrompt: APPEND_SYSTEM_PROMPT,
 			mode: p.permissionMode,
 			createProcess,
+			sessionDir: p.agent === "pi" ? projectSessionDir(p.name) : undefined,
 			idleTtlMs: config.idleTtlMs,
 		}),
 	);
