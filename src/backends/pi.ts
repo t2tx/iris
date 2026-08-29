@@ -3,7 +3,7 @@ import { randomInt } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createInterface } from "node:readline";
 import type { AgentOptions, AgentProcess, PermissionMode } from "../agent.js";
-import { type Attachment, buildContent } from "../attachments.js";
+import { type Attachment, buildPiPrompt } from "../attachments.js";
 import type { ParsedEvent, PermissionRequest } from "../protocol.js";
 import { parsePiLine } from "./pi-protocol.js";
 
@@ -123,18 +123,29 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 
 	/**
 	 * Send a user prompt to Pi in RPC mode.
-	 * With no attachments the message is a plain string;
-	 * with attachments it becomes a multimodal content array
-	 * (images inline as base64, other files saved to disk and
-	 * referenced by path).
+	 *
+	 * Pi's `prompt` command requires a plain string `message`; its
+	 * `session.prompt()` runs `text.startsWith("/")` on it, so a content
+	 * array (as Claude expects) throws. Images therefore travel in a separate
+	 * `images` field of Pi `ImageContent` parts, and non-image files are saved
+	 * to <workDir>/.iris/attachments and referenced by path in the message.
+	 * `streamingBehavior: "followUp"` lets a prompt land mid-stream instead of
+	 * being rejected with "Agent is already processing".
 	 */
 	send(prompt: string, attachments: Attachment[] = []): void {
-		if (attachments.length === 0) {
-			this.writeJSON({ type: "prompt", message: prompt });
-			return;
-		}
-		const content = buildContent(prompt, attachments, this.workDir, Date.now());
-		this.writeJSON({ type: "prompt", message: content });
+		const { message, images } = buildPiPrompt(
+			prompt,
+			attachments,
+			this.workDir,
+			Date.now(),
+		);
+		const body: Record<string, unknown> = {
+			type: "prompt",
+			message,
+			streamingBehavior: "followUp",
+		};
+		if (images.length > 0) body.images = images;
+		this.writeJSON(body);
 	}
 
 	/**

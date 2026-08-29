@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -97,6 +98,89 @@ export function buildContent(
 	}
 	parts.push({ type: "text", text });
 	return parts;
+}
+
+/**
+ * A Pi `prompt` command image part. Pi keeps images in a separate `images`
+ * field (never inside the `message` string) and uses its own shape — base64
+ * `data` plus `mimeType` — unlike Claude's `content` array.
+ */
+export interface PiImage {
+	type: "image";
+	data: string;
+	mimeType: string;
+}
+
+/**
+ * The prompt payload Pi's RPC `prompt` command expects.
+ * `message` is a plain string (Pi's `session.prompt()` runs `text.startsWith("/")`
+ * on it, so a content array breaks it); images travel in a separate `images`
+ * field. Non-image files are saved to disk and referenced by path in `message`.
+ */
+export interface PiPrompt {
+	message: string;
+	images: PiImage[];
+}
+
+/**
+ * Build the Pi RPC `prompt` payload for a user message with attachments.
+ *
+ * Pi's `prompt` takes a string `message` plus a separate `images` field of
+ * `PiImage` (image) parts, which differs in both shape and location from Claude's
+ * `buildContent` content array. Images become `PiImage` entries; non-image files
+ * are written under <workDir>/.iris/attachments and referenced by path in the
+ * trailing `message` text. Sharing the disk-save logic keeps both backends in
+ * sync without changing `buildContent` (used by the Claude path).
+ */
+export function buildPiPrompt(
+	prompt: string,
+	attachments: Attachment[],
+	workDir: string,
+	now: number,
+): PiPrompt {
+	const images: PiImage[] = [];
+	const savedFilePaths: string[] = [];
+
+	let attachDir = "";
+	const ensureDir = (): string => {
+		if (!attachDir) {
+			attachDir = join(workDir, ".iris", "attachments");
+			mkdirSync(attachDir, { recursive: true });
+		}
+		return attachDir;
+	};
+
+	attachments.forEach((att, i) => {
+		if (isImage(att.mimeType)) {
+			images.push({
+				type: "image",
+				data: att.data.toString("base64"),
+				mimeType: att.mimeType,
+			});
+			return;
+		}
+		// Non-image: persist to disk and reference by path. The token keeps
+		// filenames collision-free so two concurrent send() calls at the same
+		// index/now cannot overwrite each other.
+		const safe = att.name.replace(/[^\w.-]/g, "_") || `file_${now}_${i}`;
+		const token = randomInt(0, 0x1000000).toString(36);
+		const fpath = join(
+			ensureDir(),
+			`${now}_${i}_${token}_${safe}${suffix(att, safe)}`,
+		);
+		writeFileSync(fpath, att.data);
+		savedFilePaths.push(fpath);
+	});
+
+	let message = prompt;
+	if (!message && images.length > 0)
+		message = "Please analyze the attached image(s).";
+	else if (!message && savedFilePaths.length > 0)
+		message = "Please analyze the attached file(s).";
+	if (savedFilePaths.length > 0) {
+		message += `\n\n(Files saved locally, please read them: ${savedFilePaths.join(", ")})`;
+	}
+	return { message, images };
 }
 
 /** Append a mime-derived extension only when the name lacks one. */
