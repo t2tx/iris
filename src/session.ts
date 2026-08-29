@@ -34,6 +34,15 @@ export interface SessionConfig {
 	 */
 	createProcess?: (opts: AgentOptions, mode: PermissionMode) => AgentProcess;
 	/**
+	 * Directory the spawned agent stores its session files in. For the Pi
+	 * backend this is forwarded to `--session-dir`, scoping `--session`
+	 * lookups to this manager's directory so a resumed session cannot
+	 * accidentally match a file from a different project. Backends that
+	 * ignore it (e.g. Claude Code) simply do not pass it on. (Note: this
+	 * is NOT a bash sandbox — Pi's bash tool can still list the directory.)
+	 */
+	sessionDir?: string;
+	/**
 	 * Close a session's process after this many ms with no activity (its session
 	 * id is kept, so the next message resumes it via --resume). 0 disables the
 	 * idle reaper.
@@ -205,6 +214,7 @@ export class SessionManager {
 				workDir,
 				model: this.cfg.model,
 				appendSystemPrompt: this.cfg.appendSystemPrompt,
+				sessionDir: this.cfg.sessionDir,
 				resume,
 			},
 			this.cfg.mode,

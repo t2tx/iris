@@ -170,6 +170,157 @@ describe("PiProcess basic flow", () => {
 	});
 });
 
+// ── Per-project session-dir isolation ────────────────────────────────────────
+
+describe("PiProcess session-dir isolation", () => {
+	test("passing sessionDir adds --session-dir to argv", async () => {
+		const argvPath = join(
+			mkdtempSync(join(tmpdir(), "iris-argv-")),
+			"argv.log",
+		);
+		const sessionDir = mkdtempSync(join(tmpdir(), "iris-sessdir-"));
+		const resp = JSON.stringify({
+			type: "response",
+			command: "get_state",
+			success: true,
+			data: { sessionId: "isolation-sess" },
+		});
+		const script = [
+			`printf '%s\n' "$*" >> "${argvPath}"`,
+			`printf '%s\n' '${resp}'`,
+			"exec cat >/dev/null",
+		].join("\n");
+		const bin = createFakePi(script);
+		const mgr = new SessionManager({
+			bin,
+			workDir: process.cwd(),
+			mode: "auto",
+			sessionDir,
+			createProcess: (opts, mode) => new PiProcess(opts, mode),
+		});
+
+		mgr.send("t1", "hi", noopHandlers);
+		const ok = await waitFor(
+			() => mgr.getSessionInfo("t1")?.sessionId === "isolation-sess",
+		);
+		expect(ok).toBe(true);
+
+		const spawnLines = readFileSync(argvPath, "utf8")
+			.split("\n")
+			.filter((s) => s.includes("--mode"));
+		expect(spawnLines.length).toBeGreaterThanOrEqual(1);
+		expect(spawnLines[0]).toContain(`--session-dir ${sessionDir}`);
+		expect(spawnLines[0]).toContain("--mode rpc");
+
+		mgr.closeAll();
+	});
+
+	test("omitting sessionDir does not add --session-dir to argv", async () => {
+		const argvPath = join(
+			mkdtempSync(join(tmpdir(), "iris-argv-")),
+			"argv.log",
+		);
+		const resp = JSON.stringify({
+			type: "response",
+			command: "get_state",
+			success: true,
+			data: { sessionId: "no-dir-sess" },
+		});
+		const script = [
+			`printf '%s\n' "$*" >> "${argvPath}"`,
+			`printf '%s\n' '${resp}'`,
+			"exec cat >/dev/null",
+		].join("\n");
+		const bin = createFakePi(script);
+		const mgr = new SessionManager({
+			bin,
+			workDir: process.cwd(),
+			mode: "auto",
+			// No sessionDir — should NOT add the flag.
+			createProcess: (opts, mode) => new PiProcess(opts, mode),
+		});
+
+		mgr.send("t1", "hi", noopHandlers);
+		const ok = await waitFor(
+			() => mgr.getSessionInfo("t1")?.sessionId === "no-dir-sess",
+		);
+		expect(ok).toBe(true);
+
+		const spawnLines = readFileSync(argvPath, "utf8")
+			.split("\n")
+			.filter((s) => s.includes("--mode"));
+		expect(spawnLines.length).toBeGreaterThanOrEqual(1);
+		expect(spawnLines[0]).not.toContain("--session-dir");
+
+		mgr.closeAll();
+	});
+
+	test("sessionDir survives killSession + respawn (--session-dir + --session)", async () => {
+		const argvPath = join(
+			mkdtempSync(join(tmpdir(), "iris-argv-")),
+			"argv.log",
+		);
+		const sessionDir = mkdtempSync(join(tmpdir(), "iris-sessdir-"));
+		const resp = JSON.stringify({
+			type: "response",
+			command: "get_state",
+			success: true,
+			data: { sessionId: "isolation-resume" },
+		});
+		const script = [
+			`printf '%s\n' "$*" >> "${argvPath}"`,
+			`printf '%s\n' '${resp}'`,
+			"exec cat >/dev/null",
+		].join("\n");
+		const bin = createFakePi(script);
+		const mgr = new SessionManager({
+			bin,
+			workDir: process.cwd(),
+			mode: "auto",
+			sessionDir,
+			createProcess: (opts, mode) => new PiProcess(opts, mode),
+		});
+
+		let exited = false;
+		mgr.send("t1", "first", {
+			...noopHandlers,
+			onExit() {
+				exited = true;
+			},
+		});
+		const captured = await waitFor(
+			() => mgr.getSessionInfo("t1")?.sessionId === "isolation-resume",
+		);
+		expect(captured).toBe(true);
+
+		expect(mgr.killSession("t1")).toBe(true);
+		await waitFor(() => exited);
+		expect(mgr.getSessionInfo("t1")?.alive).toBe(false);
+
+		mgr.send("t1", "second", noopHandlers);
+		await waitFor(() => {
+			const lines = readFileSync(argvPath, "utf8")
+				.split("\n")
+				.filter((s) => s.includes("--mode"));
+			const last = lines[lines.length - 1];
+			return Boolean(
+				lines.length >= 2 &&
+					last?.includes("--session") &&
+					last?.includes(`--session-dir ${sessionDir}`),
+			);
+		});
+		const spawnLines = readFileSync(argvPath, "utf8")
+			.split("\n")
+			.filter((s) => s.includes("--mode"));
+		expect(spawnLines.length).toBeGreaterThanOrEqual(2);
+		const lastSpawn = spawnLines[spawnLines.length - 1];
+		expect(lastSpawn).toContain("--session isolation-resume");
+		expect(lastSpawn).toContain(`--session-dir ${sessionDir}`);
+
+		mgr.closeAll();
+	});
+});
+
 // ── Session id from response lines ─────────────────────────────────────────
 
 describe("PiProcess session id", () => {

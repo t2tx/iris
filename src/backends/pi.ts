@@ -60,6 +60,16 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 		// --session the switch_session fallback is sent after spawn.
 		if (opts.resume) args.push("--session", opts.resume);
 
+		// Per-project session storage isolation. By default Pi stores session
+		// files under a per-cwd subdir of ~/.pi/agent/sessions/, which is
+		// world-visible via `ls` so a Pi's bash tool can read other
+		// projects' histories. Overriding --session-dir scopes the --session
+		// lookup to this project's directory, so a resumed session cannot
+		// accidentally match another project's file. NOTE: this does NOT
+		// sandbox bash — Pi's bash tool can still `ls` the dir — so this
+		// is a scoping measure, not a filesystem boundary.
+		if (opts.sessionDir) args.push("--session-dir", opts.sessionDir);
+
 		// detached: own process group so we can kill the whole tree with a
 		// single negative-pid signal.
 		this.proc = spawn(opts.bin, args, {
