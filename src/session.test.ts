@@ -1,7 +1,9 @@
+import { EventEmitter } from "node:events";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
+import type { AgentOptions, AgentProcess, PermissionMode } from "./agent.js";
 import { SessionManager, type ThreadHandlers } from "./session.js";
 
 /**
@@ -32,8 +34,6 @@ function fakeClaudeBin(): string {
 	return path;
 }
 
-const FAKE_CLAUDE = fakeClaudeBin();
-
 const noopHandlers: ThreadHandlers = {
 	onText() {},
 	onToolUse() {},
@@ -41,6 +41,26 @@ const noopHandlers: ThreadHandlers = {
 	onResult() {},
 	onError() {},
 };
+
+/**
+ * A minimal AgentProcess backed by a real EventEmitter. Enough surface for
+ * SessionManager to spawn and wire events on, with no child process — used to
+ * observe the resolved appendSystemPrompt without a real CLI.
+ */
+function makeFakeProcess(): AgentProcess {
+	const ee = new EventEmitter();
+	return Object.assign(ee, {
+		instanceId: 1,
+		isAlive: () => true,
+		getSessionId: () => "fake-sid",
+		getPid: () => undefined as number | undefined,
+		send: () => {},
+		respondPermission: () => {},
+		close: () => {},
+	} as unknown as AgentProcess);
+}
+
+const FAKE_CLAUDE = fakeClaudeBin();
 
 /** Handlers that record every onNotice() string, for asserting visibility. */
 function capturingHandlers(): { handlers: ThreadHandlers; notices: string[] } {
@@ -182,6 +202,51 @@ test("idleTtlMs = 0 disables the reaper", async () => {
 		// Give any (nonexistent) reaper a chance to run, then confirm still alive.
 		await new Promise((r) => setTimeout(r, 200));
 		expect(mgr.getSessionInfo("thread-1")?.alive).toBe(true);
+	} finally {
+		mgr.closeAll();
+	}
+});
+
+test("session-scoped outbox prompt follows /switch work-dir override", () => {
+	// A /switch sets a work-dir override for the session key; the appended system
+	// prompt (and thus the outbox it points at) must resolve to the EFFECTIVE work
+	// dir, not the project's default — otherwise a requested file written to the
+	// overridden outbox would never be drained.
+	const overrideDir = mkdtempSync(join(tmpdir(), "iris-override-"));
+	let capturedPrompt = "";
+	let lastWorkDir = "";
+	const mgr = new SessionManager({
+		bin: FAKE_CLAUDE,
+		workDir: process.cwd(),
+		mode: "auto",
+		appendSystemPrompt: (workDir, sessionKey) =>
+			`outbox:${workDir}/.iris/outbox/${sessionKey}`,
+		createProcess: (opts: AgentOptions, _mode: PermissionMode) => {
+			capturedPrompt = opts.appendSystemPrompt ?? "";
+			lastWorkDir = opts.workDir;
+			return makeFakeProcess();
+		},
+		now: () => 1_000_000,
+	});
+	try {
+		// Default session → prompt resolves to the project's base work dir.
+		mgr.send("t1", "hi", noopHandlers);
+		expect(lastWorkDir).toBe(process.cwd());
+		expect(capturedPrompt).toContain(
+			join(process.cwd(), ".iris", "outbox", "t1"),
+		);
+
+		// Overridden session → prompt resolves to the override's work dir, and the
+		// project's base outbox is NOT leaked into the prompt.
+		mgr.setWorkDirOverride("t2", overrideDir);
+		mgr.send("t2", "again", noopHandlers);
+		expect(lastWorkDir).toBe(overrideDir);
+		expect(capturedPrompt).toContain(
+			join(overrideDir, ".iris", "outbox", "t2"),
+		);
+		expect(capturedPrompt).not.toContain(
+			join(process.cwd(), ".iris", "outbox"),
+		);
 	} finally {
 		mgr.closeAll();
 	}

@@ -26,12 +26,15 @@ export interface SessionConfig {
 	model?: string;
 	/**
 	 * The system prompt appended to the agent's CLI at spawn. May be a static
-	 * string or a builder `(sessionKey: string) => string` resolved per session at
-	 * spawn time — used to point each session at its own outbox subdirectory
-	 * (<workDir>/.iris/outbox/<session>) so two sessions on the same work_dir
-	 * cannot drain each other's files.
+	 * string or a builder `(workDir, sessionKey) => string` resolved per session at
+	 * spawn time. The builder receives the *effective* work directory (honoring a
+	 * /switch override) and the session key so each session is pointed at its own
+	 * outbox (<effectiveWorkDir>/.iris/outbox/<session>) — keeping the prompt and the
+	 * drain on the same outbox even when the session's work dir is overridden.
 	 */
-	appendSystemPrompt?: string | ((sessionKey: string) => string);
+	appendSystemPrompt?:
+		| string
+		| ((workDir: string, sessionKey: string) => string);
 	mode: PermissionMode;
 	/**
 	 * Build a resident agent process for a thread's session. Injecting the
@@ -215,11 +218,13 @@ export class SessionManager {
 		const resumingAfterIdle = existing?.idleClosed === true && Boolean(resume);
 		this.resumeOverrides.delete(threadTs);
 		const workDir = this.workDirOverrides.get(threadTs) ?? this.cfg.workDir;
-		// The outbox path depends on the session key, so if the prompt is a builder,
-		// resolve it here (where the key is known) to this spawn's concrete prompt.
+		// The outbox path depends on the effective work dir (a /switch override) and
+		// the session key, so if the prompt is a builder, resolve it here — where
+		// both are known — to this spawn's concrete prompt. This keeps the prompt and
+		// later drain on the same outbox even under a work-dir override.
 		const appendSystemPrompt =
 			typeof this.cfg.appendSystemPrompt === "function"
-				? this.cfg.appendSystemPrompt(threadTs)
+				? this.cfg.appendSystemPrompt(workDir, threadTs)
 				: this.cfg.appendSystemPrompt;
 		const proc = this.createProcess(
 			{

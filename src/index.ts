@@ -165,8 +165,8 @@ for (const p of config.projects) {
 			bin,
 			workDir: p.workDir,
 			model: p.model,
-			appendSystemPrompt: (sessionKey) =>
-				buildSystemPrompt(outboxDir(p.workDir, sessionKey)),
+			appendSystemPrompt: (workDir, sessionKey) =>
+				buildSystemPrompt(outboxDir(workDir, sessionKey)),
 			mode: p.permissionMode,
 			createProcess,
 			sessionDir: p.agent === "pi" ? projectSessionDir(p.name) : undefined,
@@ -365,9 +365,17 @@ function handlersFor(
 			// Outbound files are an explicit outbox, independent of the visible text:
 			// an agent may place a file in its session outbox (
 			// <workDir>/.iris/outbox/<session>) even on a NO_REPLY turn, so drain
-			// this session's outbox on every turn. Only this session is drained; the
-			// reply text is never scanned for paths.
-			await uploadDetected(project.workDir, sessionKey, channel, threadTs);
+			// this session's outbox on every turn. The drain must target the session's
+			// EFFECTIVE work dir (a /switch may have overridden it), so the agent's
+			// writes and Iris's drain share the same outbox. Only this session is
+			// drained; the reply text is never scanned for paths.
+			const mgr = managers.get(project.name);
+			await uploadDetected(
+				mgr?.getEffectiveWorkDir(sessionKey) ?? project.workDir,
+				sessionKey,
+				channel,
+				threadTs,
+			);
 			if (usage) {
 				const footer = usageFooter(usage);
 				if (footer) await post({ text: footer });
