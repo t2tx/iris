@@ -1,29 +1,30 @@
 /**
- * file-upload.ts — detects local file paths in Claude's text output and
- * uploads them to Slack via files.uploadV2.
+ * file-upload.ts — uploads the files an agent placed in its outbox to Slack via
+ * files.uploadV2.
  *
- * Heuristic: look for absolute paths (starting with / or ~/) that point to an
- * existing regular file. Any file type is uploaded — source files (.ts, .py, …)
- * as well as documents/images — so "send me the file" just works. (Earlier this
- * had an extension allow-list that excluded source code, so Claude would write
- * a path expecting it to be uploaded, but nothing was attached.)
+ * Outbound file delivery is an EXPLICIT contract, not a heuristic: to send a file
+ * to the user, an agent writes it under its session's outbox (
+ * <workDir>/.iris/outbox/<session>, see attachments.outboxDir / the prompt
+ * builder in index.ts). Iris uploads every existing file found there and then
+ * deletes it (a one-shot queue). This is the only transfer path — there is no
+ * longer any scanning of the reply text for paths.
+ *
+ * The outbox is scoped per Slack session so two sessions on the same work_dir
+ * cannot drain each other's files, and the old reply-text scan (detectFiles)
+ * had two failure modes that the outbox removes: (a) missing a requested file
+ * when its path never appears in prose, and (b) auto-attaching unrelated absolute
+ * paths that happened to appear inside dumped file content.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, join } from "node:path";
-
-/**
- * Match local file paths in text: absolute (`/...`) or home-relative (`~/...`),
- * with or without an extension. Claude often writes the latter, so we accept
- * both and expand `~/` below.
- */
-const PATH_PATTERN = /(?:^|\s|`)((?:~\/|\/)[\w./-]+)/gm;
-
-/** Expand a leading `~/` to the user's home directory. */
-function expandHome(p: string): string {
-	return p.startsWith("~/") ? join(homedir(), p.slice(2)) : p;
-}
+import {
+	existsSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+} from "node:fs";
+import { join } from "node:path";
+import { safeSessionKey } from "./attachments.js";
 
 export interface DetectedFile {
 	path: string;
@@ -31,27 +32,61 @@ export interface DetectedFile {
 }
 
 /**
- * Scan text for local paths that point to an existing regular file. Any file
- * type is accepted. Returns a deduplicated list. Directories are skipped.
+ * Outcome of removing a drained outbox file. `ok: true` covers both a successful
+ * deletion and an already-gone file (ENOENT — a TOCTOU race or a second drain),
+ * which are both benign. `ok: false` is a real deletion failure, left for the
+ * caller to log because it means the file may be delivered again on a later turn.
  */
-export function detectFiles(text: string): DetectedFile[] {
-	const seen = new Set<string>();
-	const results: DetectedFile[] = [];
+export type DeleteResult = { ok: true } | { ok: false; error: Error };
 
-	for (const match of text.matchAll(PATH_PATTERN)) {
-		// Trim a trailing backtick/punctuation the greedy class may have caught.
-		const raw = match[1]!.replace(/[`.,)]+$/, "");
-		const filePath = expandHome(raw);
-		if (seen.has(filePath)) continue;
-		seen.add(filePath);
-
-		if (!existsSync(filePath)) continue;
-		if (!statSync(filePath).isFile()) continue; // skip directories
-
-		results.push({ path: filePath, name: basename(filePath) });
+/**
+ * Enumerate a session's outbox: <workDir>/.iris/outbox/<session>. Files belong to
+ * the completing session only, so two sessions on the same work_dir cannot drain
+ * each other. The inbound inbox (<workDir>/.iris/attachments, see #77) is a
+ * different directory, so the three never collide. Returns [] when the session
+ * outbox is absent.
+ */
+export function listOutbox(
+	workDir: string,
+	sessionKey: string,
+): DetectedFile[] {
+	const outboxBase = join(
+		workDir,
+		".iris",
+		"outbox",
+		safeSessionKey(sessionKey),
+	);
+	if (!existsSync(outboxBase)) return [];
+	const out: DetectedFile[] = [];
+	for (const entry of readdirSync(outboxBase, { withFileTypes: true })) {
+		if (!entry.isFile()) continue; // skip subdirectories
+		const path = join(outboxBase, entry.name);
+		// Guard against a race between readdir and stat.
+		if (existsSync(path) && statSync(path).isFile()) {
+			out.push({ path, name: entry.name });
+		}
 	}
+	return out;
+}
 
-	return results;
+/**
+ * Remove a freshly-uploaded outbox file. The outbox is a one-shot queue, so a
+ * successful upload is followed by a deletion. An ENOENT is the already-removed
+ * case and is reported as `ok` (a second drain, or a race, must not look like a
+ * failure); any *other* error is returned so the caller can log it — a stranded
+ * file would otherwise be re-delivered on the next turn.
+ */
+export function deleteOutboxFile(path: string): DeleteResult {
+	try {
+		rmSync(path);
+		return { ok: true };
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return { ok: true };
+		return {
+			ok: false,
+			error: err instanceof Error ? err : new Error(String(err)),
+		};
+	}
 }
 
 /**

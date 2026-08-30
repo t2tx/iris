@@ -24,7 +24,17 @@ export interface SessionConfig {
 	bin: string;
 	workDir: string;
 	model?: string;
-	appendSystemPrompt?: string;
+	/**
+	 * The system prompt appended to the agent's CLI at spawn. May be a static
+	 * string or a builder `(workDir, sessionKey) => string` resolved per session at
+	 * spawn time. The builder receives the *effective* work directory (honoring a
+	 * /switch override) and the session key so each session is pointed at its own
+	 * outbox (<effectiveWorkDir>/.iris/outbox/<session>) — keeping the prompt and the
+	 * drain on the same outbox even when the session's work dir is overridden.
+	 */
+	appendSystemPrompt?:
+		| string
+		| ((workDir: string, sessionKey: string) => string);
 	mode: PermissionMode;
 	/**
 	 * Build a resident agent process for a thread's session. Injecting the
@@ -208,12 +218,20 @@ export class SessionManager {
 		const resumingAfterIdle = existing?.idleClosed === true && Boolean(resume);
 		this.resumeOverrides.delete(threadTs);
 		const workDir = this.workDirOverrides.get(threadTs) ?? this.cfg.workDir;
+		// The outbox path depends on the effective work dir (a /switch override) and
+		// the session key, so if the prompt is a builder, resolve it here — where
+		// both are known — to this spawn's concrete prompt. This keeps the prompt and
+		// later drain on the same outbox even under a work-dir override.
+		const appendSystemPrompt =
+			typeof this.cfg.appendSystemPrompt === "function"
+				? this.cfg.appendSystemPrompt(workDir, threadTs)
+				: this.cfg.appendSystemPrompt;
 		const proc = this.createProcess(
 			{
 				bin: this.cfg.bin,
 				workDir,
 				model: this.cfg.model,
-				appendSystemPrompt: this.cfg.appendSystemPrompt,
+				appendSystemPrompt,
 				sessionDir: this.cfg.sessionDir,
 				resume,
 			},

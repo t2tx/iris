@@ -42,3 +42,13 @@ allow_users = ["U09XXXXXXX"]       # このユーザーからの DM
 # allow_users = ["U09XXXXXXX"]
 # permission_mode = "acceptEdits"  # 編集系は自動許可（個別上書き）
 # agent = "pi"                  # pi を使う場合は pi（デフォルトは claude）
+
+# ── ファイルの転送（agent → Slack）について ──────────────────────────────
+# 出方向の転送は「返信本文から絶対パスを拾う」ヒューリスティックではなく、
+# 明示的な outbox 契約で統一している（Claude・Pi 双方、後端の差分なし）。
+# 転送したいファイルは <work_dir>/.iris/outbox/ に置くだけでよい:
+#   ・Iris は outbox 配下の現存ファイルを全部転送し、転送後削除する（一時キュー）。
+#   ・受信インボックス <work_dir>/.iris/attachments/ とは別ディレクトリで衝突しない。
+# 本文にパスを書く・中身を貼り付けても転送されない。転送の唯一の経路は outbox である。
+# （この指示は agent への --append-system-prompt で周知されるため設定は不要。
+#  理解のためだけなら、このコメントと AGENTS.md を参照のこと。）
