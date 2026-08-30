@@ -145,15 +145,19 @@ for (const p of config.projects) {
 		p.agent === "pi"
 			? (opts, mode) => new PiProcess(opts, mode)
 			: (opts, mode) => new ClaudeProcess(opts, mode);
-	// The agent's outbound queue lives under this project's work_dir. Pre-create
-	// it so the agent can drop a file in on a first turn without a write, and point
-	// the appended system prompt at that exact path. Both backends share this outbox
-	// contract — there is no per-backend difference.
-	const outbox = outboxDir(p.workDir);
+	// The outbox is scoped per Slack session (<workDir>/.iris/outbox/<session>),
+	// so two sessions on the same work_dir cannot drain each other's files. The
+	// project base is pre-created so the agent's first per-session write has a path
+	// to land in; the per-session subdirectory is created by the agent's own write.
+	// Both backends share this outbox contract — there is no per-backend difference.
+	// The prompt is a builder because the outbox path depends on the session key,
+	// which is known only when a session is spawned (see SessionManager#ensure).
 	try {
 		ensureOutboxDir(p.workDir);
 	} catch (err) {
-		log.warn(`Could not create outbox ${outbox}: ${(err as Error).message}`);
+		log.warn(
+			`Could not create outbox <work_dir>/.iris/outbox: ${(err as Error).message}`,
+		);
 	}
 	managers.set(
 		p.name,
@@ -161,7 +165,8 @@ for (const p of config.projects) {
 			bin,
 			workDir: p.workDir,
 			model: p.model,
-			appendSystemPrompt: buildSystemPrompt(outbox),
+			appendSystemPrompt: (sessionKey) =>
+				buildSystemPrompt(outboxDir(p.workDir, sessionKey)),
 			mode: p.permissionMode,
 			createProcess,
 			sessionDir: p.agent === "pi" ? projectSessionDir(p.name) : undefined,
@@ -205,10 +210,11 @@ async function flushStream(sessionKey: string): Promise<string> {
  */
 async function uploadDetected(
 	workDir: string,
+	sessionKey: string,
 	channel: string,
 	threadTs?: string,
 ): Promise<void> {
-	for (const file of listOutbox(workDir)) {
+	for (const file of listOutbox(workDir, sessionKey)) {
 		try {
 			await uploadFile(app.client as never, file, channel, threadTs);
 		} catch (err) {
@@ -217,7 +223,15 @@ async function uploadDetected(
 			log.error(`File upload failed: ${file.path}: ${(err as Error).message}`);
 			continue;
 		}
-		deleteOutboxFile(file.path);
+		// A successful upload is followed by a deletion. A real deletion failure
+		// (not a benign ENOENT) means the file may be re-delivered on a later turn,
+		// so surface it rather than swallowing it.
+		const removed = deleteOutboxFile(file.path);
+		if (!removed.ok) {
+			log.error(
+				`Outbox file not deleted (may be re-delivered): ${file.path}: ${removed.error.message}`,
+			);
+		}
 	}
 }
 
@@ -349,9 +363,11 @@ function handlersFor(
 				}
 			}
 			// Outbound files are an explicit outbox, independent of the visible text:
-			// an agent may place a file in <workDir>/.iris/outbox/ even on a NO_REPLY
-			// turn, so drain it on every turn. The reply text is never scanned for paths.
-			await uploadDetected(project.workDir, channel, threadTs);
+			// an agent may place a file in its session outbox (
+			// <workDir>/.iris/outbox/<session>) even on a NO_REPLY turn, so drain
+			// this session's outbox on every turn. Only this session is drained; the
+			// reply text is never scanned for paths.
+			await uploadDetected(project.workDir, sessionKey, channel, threadTs);
 			if (usage) {
 				const footer = usageFooter(usage);
 				if (footer) await post({ text: footer });

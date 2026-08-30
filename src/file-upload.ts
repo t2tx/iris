@@ -3,16 +3,17 @@
  * files.uploadV2.
  *
  * Outbound file delivery is an EXPLICIT contract, not a heuristic: to send a file
- * to the user, an agent writes it under <workDir>/.iris/outbox/ (see
- * attachments.outboxDir / APPEND_SYSTEM_PROMPT). Iris uploads every existing file
- * found there and then deletes it (a one-shot queue). This is the only transfer
- * path — there is no longer any scanning of the reply text for paths.
+ * to the user, an agent writes it under its session's outbox (
+ * <workDir>/.iris/outbox/<session>, see attachments.outboxDir / the prompt
+ * builder in index.ts). Iris uploads every existing file found there and then
+ * deletes it (a one-shot queue). This is the only transfer path — there is no
+ * longer any scanning of the reply text for paths.
  *
- * Scanning reply text (the old detectFiles) misbehaved on every backend: a coding
- * agent that dumps a file's CONTENT into its reply would (a) miss the requested
- * file when its own path never appears in prose, and (b) auto-attach every
- * unrelated absolute path that happened to appear inside the dumped content. Both
- * are gone now: only the outbox is transferred.
+ * The outbox is scoped per Slack session so two sessions on the same work_dir
+ * cannot drain each other's files, and the old reply-text scan (detectFiles)
+ * had two failure modes that the outbox removes: (a) missing a requested file
+ * when its path never appears in prose, and (b) auto-attaching unrelated absolute
+ * paths that happened to appear inside dumped file content.
  */
 
 import {
@@ -23,6 +24,7 @@ import {
 	statSync,
 } from "node:fs";
 import { join } from "node:path";
+import { safeSessionKey } from "./attachments.js";
 
 export interface DetectedFile {
 	path: string;
@@ -30,17 +32,35 @@ export interface DetectedFile {
 }
 
 /**
- * Enumerate the outbox for a working directory: <workDir>/.iris/outbox.
- * The inbound inbox (<workDir>/.iris/attachments, see #77) is a different
- * directory, so the two never collide. Returns [] when the outbox is absent.
+ * Outcome of removing a drained outbox file. `ok: true` covers both a successful
+ * deletion and an already-gone file (ENOENT — a TOCTOU race or a second drain),
+ * which are both benign. `ok: false` is a real deletion failure, left for the
+ * caller to log because it means the file may be delivered again on a later turn.
  */
-export function listOutbox(workDir: string): DetectedFile[] {
-	const outboxDir = join(workDir, ".iris", "outbox");
-	if (!existsSync(outboxDir)) return [];
+export type DeleteResult = { ok: true } | { ok: false; error: Error };
+
+/**
+ * Enumerate a session's outbox: <workDir>/.iris/outbox/<session>. Files belong to
+ * the completing session only, so two sessions on the same work_dir cannot drain
+ * each other. The inbound inbox (<workDir>/.iris/attachments, see #77) is a
+ * different directory, so the three never collide. Returns [] when the session
+ * outbox is absent.
+ */
+export function listOutbox(
+	workDir: string,
+	sessionKey: string,
+): DetectedFile[] {
+	const outboxBase = join(
+		workDir,
+		".iris",
+		"outbox",
+		safeSessionKey(sessionKey),
+	);
+	if (!existsSync(outboxBase)) return [];
 	const out: DetectedFile[] = [];
-	for (const entry of readdirSync(outboxDir, { withFileTypes: true })) {
+	for (const entry of readdirSync(outboxBase, { withFileTypes: true })) {
 		if (!entry.isFile()) continue; // skip subdirectories
-		const path = join(outboxDir, entry.name);
+		const path = join(outboxBase, entry.name);
 		// Guard against a race between readdir and stat.
 		if (existsSync(path) && statSync(path).isFile()) {
 			out.push({ path, name: entry.name });
@@ -49,13 +69,23 @@ export function listOutbox(workDir: string): DetectedFile[] {
 	return out;
 }
 
-/** Remove a freshly-uploaded outbox file (the outbox is a one-shot queue). */
-export function deleteOutboxFile(path: string): void {
+/**
+ * Remove a freshly-uploaded outbox file. The outbox is a one-shot queue, so a
+ * successful upload is followed by a deletion. An ENOENT is the already-removed
+ * case and is reported as `ok` (a second drain, or a race, must not look like a
+ * failure); any *other* error is returned so the caller can log it — a stranded
+ * file would otherwise be re-delivered on the next turn.
+ */
+export function deleteOutboxFile(path: string): DeleteResult {
 	try {
 		rmSync(path);
-	} catch {
-		// A vanished file (already removed) or a transient error must not abort
-		// the rest of the queue's uploads.
+		return { ok: true };
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return { ok: true };
+		return {
+			ok: false,
+			error: err instanceof Error ? err : new Error(String(err)),
+		};
 	}
 }
 

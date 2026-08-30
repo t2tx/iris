@@ -24,7 +24,14 @@ export interface SessionConfig {
 	bin: string;
 	workDir: string;
 	model?: string;
-	appendSystemPrompt?: string;
+	/**
+	 * The system prompt appended to the agent's CLI at spawn. May be a static
+	 * string or a builder `(sessionKey: string) => string` resolved per session at
+	 * spawn time — used to point each session at its own outbox subdirectory
+	 * (<workDir>/.iris/outbox/<session>) so two sessions on the same work_dir
+	 * cannot drain each other's files.
+	 */
+	appendSystemPrompt?: string | ((sessionKey: string) => string);
 	mode: PermissionMode;
 	/**
 	 * Build a resident agent process for a thread's session. Injecting the
@@ -208,12 +215,18 @@ export class SessionManager {
 		const resumingAfterIdle = existing?.idleClosed === true && Boolean(resume);
 		this.resumeOverrides.delete(threadTs);
 		const workDir = this.workDirOverrides.get(threadTs) ?? this.cfg.workDir;
+		// The outbox path depends on the session key, so if the prompt is a builder,
+		// resolve it here (where the key is known) to this spawn's concrete prompt.
+		const appendSystemPrompt =
+			typeof this.cfg.appendSystemPrompt === "function"
+				? this.cfg.appendSystemPrompt(threadTs)
+				: this.cfg.appendSystemPrompt;
 		const proc = this.createProcess(
 			{
 				bin: this.cfg.bin,
 				workDir,
 				model: this.cfg.model,
-				appendSystemPrompt: this.cfg.appendSystemPrompt,
+				appendSystemPrompt,
 				sessionDir: this.cfg.sessionDir,
 				resume,
 			},

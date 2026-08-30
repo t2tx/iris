@@ -11,29 +11,50 @@ import { join } from "node:path";
  * Mirrors cc-connect's agent/claudecode/session.go Send().
  *
  * Outbound (Claude/Pi → Slack): the inverse — a file the agent wants to send to
- * the user is written under <workDir>/.iris/outbox (outboxDir below), which
- * file-upload.ts uploads and removes. Inbound (.iris/attachments) and outbound
+ * the user is written under the session's outbox (outboxDir, below), which
+ * file-upload.ts uploads and removes. Each Slack session gets its own outbox
+ * subdirectory (<workDir>/.iris/outbox/<session>) so two sessions on the same
+ * work_dir (parallel threads, a /resume, or a /clear starting a fresh session)
+ * cannot drain each other's files. Inbound (.iris/attachments) and outbound
  * (.iris/outbox) live in sibling directories so they never collide.
  */
 
 /**
  * The outbound outbox a project's agent drops files in to send them to Slack.
- * One directory per project's work_dir. Kept under `.iris` next to the incoming
- * attachments dir so the two are visually parallel and never collide.
+ * Scoped per Slack session (thread_ts, or the DM channel id — the same key Iris
+ * routes and drains by) under <workDir>/.iris/outbox/<session>, next to the
+ * incoming attachments dir.
  *
- * Both backends share this contract: the agent writes a file here, Iris uploads
- * it and deletes it. No path scanning of the reply text is involved — this is
- * the only transfer path (see APPEND_SYSTEM_PROMPT in index.ts).
+ * When `sessionKey` is omitted, this returns the project-wide base
+ * (<workDir>/.iris/outbox) used only to pre-create the tree; the per-session
+ * subdirectories are then created by the agent's own write. Both backends share
+ * this contract: the agent writes a file here, Iris uploads it and deletes it,
+ * and no path scanning of the reply text is involved (the only transfer path —
+ * see the prompt builder in index.ts).
  */
-export function outboxDir(workDir: string): string {
-	return join(workDir, ".iris", "outbox");
+export function outboxDir(workDir: string, sessionKey?: string): string {
+	if (sessionKey === undefined) return join(workDir, ".iris", "outbox");
+	return join(workDir, ".iris", "outbox", safeSessionKey(sessionKey));
 }
 
 /**
- * Create a project's outbox directory. No-op if it already exists.
+ * Render a Slack session key (thread_ts like `1700.0001`, or a channel id like
+ * `D123`) as a single, filesystem-safe path segment. Non `[A-Za-z0-9_-]` chars
+ * are collapsed to `_` so the per-session outbox subdirectory is never a path
+ * traversal or has reserved characters. A blank key falls back to `default`.
  */
-export function ensureOutboxDir(workDir: string): string {
-	const dir = outboxDir(workDir);
+export function safeSessionKey(sessionKey: string): string {
+	const cleaned = sessionKey.replace(/[^A-Za-z0-9_-]/g, "_");
+	return cleaned === "" ? "default" : cleaned;
+}
+
+/**
+ * Create a project's (or session's) outbox directory. No-op if it exists. Pass
+ * `sessionKey` to create a specific session's subdirectory; omit it to create
+ * the project base.
+ */
+export function ensureOutboxDir(workDir: string, sessionKey?: string): string {
+	const dir = outboxDir(workDir, sessionKey);
 	mkdirSync(dir, { recursive: true });
 	return dir;
 }

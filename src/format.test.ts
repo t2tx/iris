@@ -65,18 +65,27 @@ test("toolProgressLine: summarizes known tools", () => {
 	);
 });
 
-test("toolProgressLine: Pi's lowercase tool names surface their path", () => {
-	// Pi emits lowercase tool names (read/write/edit, …); they share Claude's
-	// input shapes, so the 🛠️ line must still show the file path.
-	expect(toolProgressLine("read", { file_path: "/x/y.ts" })).toMatch(
+test("toolProgressLine: Pi's lowercase tools surface their path via `path`", () => {
+	// Pi emits lowercase tool names AND names the file field `path` (not Claude's
+	// `file_path`). The extractor prefers file_path (Claude) then falls back to
+	// path (Pi), so the 🛠️ line must show the path for both backends.
+	expect(toolProgressLine("read", { path: "/x/y.ts" })).toMatch(
 		/read — \/x\/y\.ts/,
 	);
-	expect(toolProgressLine("write", { file_path: "/x/z.md" })).toMatch(
+	expect(toolProgressLine("write", { path: "/x/z.md" })).toMatch(
 		/write — \/x\/z\.md/,
 	);
-	expect(toolProgressLine("edit", { file_path: "/x/e.ts" })).toMatch(
+	expect(toolProgressLine("edit", { path: "/x/e.ts" })).toMatch(
 		/edit — \/x\/e\.ts/,
 	);
+});
+
+test("toolProgressLine: Claude's `file_path` still wins when present", () => {
+	// A file field under BOTH names resolves to the Claude `file_path` value
+	// (it has precedence over the Pi `path` fallback).
+	expect(
+		toolProgressLine("Read", { file_path: "/claude/z.ts", path: "/pi/z.ts" }),
+	).toMatch(/Read — \/claude\/z\.ts/);
 });
 
 test("toolProgressLine: unknown tool with no usable input has no detail", () => {

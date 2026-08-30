@@ -50,7 +50,13 @@ export function toolProgressLine(
 // Keys cover BOTH Claude's PascalCase tool names (Read/Edit/Write, …) and Pi's
 // lowercase tool names (read/write/edit, …): Pi emits lowercase, so without them
 // the 🛠️ progress line for a Pi tool lost its path detail.
-const fileExtractor = (o: Record<string, unknown>) => str(o["file_path"]);
+//
+// Claude names the file field `file_path`; Pi's lowercase read/edit/write name it
+// `path`. Prefer file_path (Claude) and fall back to path (Pi). `||` is used
+// (not `??`) because str() returns "" — a non-nullish — for a missing field, so
+// a nullish-aware `??` would never take the fallback.
+const fileExtractor = (o: Record<string, unknown>) =>
+	str(o["file_path"]) || str(o["path"]);
 const pathExtractor = (o: Record<string, unknown>) =>
 	joinParts(str(o["pattern"]), str(o["path"]));
 
