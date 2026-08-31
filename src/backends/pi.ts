@@ -129,8 +129,12 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 	 * array (as Claude expects) throws. Images therefore travel in a separate
 	 * `images` field of Pi `ImageContent` parts, and non-image files are saved
 	 * to <workDir>/.iris/attachments and referenced by path in the message.
-	 * `streamingBehavior: "followUp"` lets a prompt land mid-stream instead of
-	 * being rejected with "Agent is already processing".
+	 * `streamingBehavior` controls where a prompt lands when the agent is busy.
+	 * Pi only reads it while streaming; when idle it is ignored, so `steer`
+	 * degrades to a normal immediate prompt. When a turn is in flight, `steer`
+	 * injects the message after the current batch of tool calls and before the
+	 * next LLM call (mid-run redirect), which also avoids the "Agent is already
+	 * processing" rejection. (followUp would defer until the agent fully stops.)
 	 */
 	send(prompt: string, attachments: Attachment[] = []): void {
 		const { message, images } = buildPiPrompt(
@@ -142,7 +146,7 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 		const body: Record<string, unknown> = {
 			type: "prompt",
 			message,
-			streamingBehavior: "followUp",
+			streamingBehavior: "steer",
 		};
 		if (images.length > 0) body.images = images;
 		this.writeJSON(body);

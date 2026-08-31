@@ -734,8 +734,9 @@ describe("PiProcess attachments", () => {
 		expect(images[0]?.type).toBe("image");
 		expect(images[0]?.mimeType).toBe("image/png");
 		expect(typeof images[0]?.data).toBe("string");
-		// followUp lets a prompt land mid-stream.
-		expect(prompt.streamingBehavior).toBe("followUp");
+		// steer injects a prompt mid-run (after the current tool batch);
+		// when idle Pi ignores it and runs the prompt immediately.
+		expect(prompt.streamingBehavior).toBe("steer");
 	});
 
 	test("non-image file is saved to .iris/attachments and referenced in message", async () => {
