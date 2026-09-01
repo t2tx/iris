@@ -107,16 +107,17 @@ function newProc(
 }
 
 /**
- * Wait for a HermesProcess event. The default budget is generous (15s): these
- * tests spawn a REAL `sh` subprocess and a full ACP handshake, so under heavy
- * CI-runner load (fork-parallel + slow runner) a 3s budget occasionally
- * starves the first post-spawn event. A true deadlock is far longer, so a
- * comfortable headroom both absorbs jitter and still fails fast on a hang.
+ * Wait for a HermesProcess event. The default budget is generous (30s): these
+ * tests spawn a REAL `sh` subprocess and a full ACP handshake through node
+ * pipes, so under heavy CI fork-parallel load a single proc's round-trip can
+ * legitimately exceed 5–15s. 30s absorbs that jitter; a genuine deadlock still
+ * surfaces (the vitest testTimeout in vitest.config.ts is set slightly higher
+ * so this budget, not the outer, reports the failure cleanly).
  */
 function waitFor(
 	proc: HermesProcess,
 	ev: string,
-	ms = 15_000,
+	ms = 30_000,
 ): Promise<unknown[]> {
 	return new Promise((resolve, reject) => {
 		const t = setTimeout(
@@ -148,8 +149,9 @@ describe("HermesProcess basic", () => {
 		const proc = newProc(createFakeHermes(), "manual", {
 			sessionKey: "1",
 		});
+		const textP = waitFor(proc, "text");
 		proc.send("hi");
-		const [text] = (await waitFor(proc, "text")) as [string];
+		const [text] = (await textP) as [string];
 		expect(text).toBe("hello");
 		proc.close();
 	});
@@ -158,8 +160,9 @@ describe("HermesProcess basic", () => {
 		const proc = newProc(createFakeHermes(), "manual", {
 			sessionKey: "1",
 		});
+		const resultP = waitFor(proc, "result");
 		proc.send("hi");
-		const [raw] = (await waitFor(proc, "result")) as [Record<string, unknown>];
+		const [raw] = (await resultP) as [Record<string, unknown>];
 		expect(raw.id).toBeDefined();
 		proc.close();
 	});
@@ -190,8 +193,9 @@ describe("HermesProcess permission", () => {
 			"manual",
 			{ sessionKey: "1" },
 		);
+		const permP = waitFor(proc, "permission");
 		proc.send("do a thing");
-		const [req] = (await waitFor(proc, "permission")) as [
+		const [req] = (await permP) as [
 			{ requestId: string; toolName: string; input: unknown },
 		];
 		expect(req.requestId).toBe("perm-1");
@@ -205,9 +209,10 @@ describe("HermesProcess permission", () => {
 			"auto",
 			{ sessionKey: "1" },
 		);
-		proc.send("do a thing");
 		// auto mode auto-answers; the turn completes via a result event.
-		await waitFor(proc, "result");
+		const autoResultP = waitFor(proc, "result");
+		proc.send("do a thing");
+		await autoResultP;
 		proc.close();
 	});
 });
