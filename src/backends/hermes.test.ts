@@ -42,25 +42,32 @@ fi
 SID=$FAKE_HERMES_SID
 [ -n "$SID" ] || SID=sess-fake-123
 
-# startup: initialize + new_session responses (correlated by JSON-RPC id)
-emit '{"jsonrpc":"2.0","id":1,"result":{"agentCapabilities":{},"agentInfo":{"name":"hermes","version":"0.x"},"protocolVersion":1}}'
-emit "$(printf '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"%s","models":[],"modes":{"availableModes":["default"],"currentModeId":"default"}}}' "$SID")"
-
-# respond to a session/prompt on stdin (text + result, or the permission flow)
+# Proper ACP request/response: read each JSON-RPC request from stdin and reply
+# with the SAME id (rid), in the order the client sends them. This removes the
+# response-correlation race that pre-emptive startup emission caused: a fast node
+# runner could process the session/new response before its request's pending was
+# registered and drop it, leaving the session un-ready and the prompt un-sent.
 while IFS= read -r line; do
+  rid=$(printf '%s' "$line" | grep -o '"id":[0-9][0-9]*' | head -n1 | sed 's/^"id"://')
   case "$line" in
-     *session/prompt*)
+       *initialize*)
+      emit "$(printf '{"jsonrpc":"2.0","id":%s,"result":{"agentCapabilities":{},"agentInfo":{"name":"hermes","version":"0.x"},"protocolVersion":1}}' "$rid")"
+       ;;
+       *session/new*|*session/resume*)
+      emit "$(printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"%s","models":[],"modes":{"availableModes":["default"],"currentModeId":"default"}}}' "$rid" "$SID")"
+       ;;
+       *session/prompt*)
       if [ -n "$FAKE_HERMES_PERM" ]; then
         emit "$(printf '{"jsonrpc":"2.0","id":"perm-1","method":"session/request_permission","params":{"session_id":"%s","tool_call":{"title":"Bash: ls","kind":"execute","raw_input":{"command":"ls"}},"options":[{"option_id":"allow_once","kind":"allow_once","name":"Allow once"},{"option_id":"deny","kind":"reject_once","name":"Deny"}]}}' "$SID")"
         if [ -n "$FAKE_HERMES_AUTO" ]; then
           emit "$(printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":{"content":{"text":"ok","type":"text"},"sessionUpdate":"agent_message_chunk"}}}' "$SID")"
-          emit '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn","usage":{"inputTokens":5,"outputTokens":2,"cachedReadTokens":0,"thoughtTokens":0,"totalTokens":7}}}'
+          emit "$(printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn","usage":{"inputTokens":5,"outputTokens":2,"cachedReadTokens":0,"thoughtTokens":0,"totalTokens":7}}}' "$rid")"
         fi
       else
         emit "$(printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":{"content":{"text":"hello","type":"text"},"sessionUpdate":"agent_message_chunk"}}}' "$SID")"
-        emit '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn","usage":{"inputTokens":5,"outputTokens":2,"cachedReadTokens":0,"thoughtTokens":0,"totalTokens":7}}}'
+        emit "$(printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn","usage":{"inputTokens":5,"outputTokens":2,"cachedReadTokens":0,"thoughtTokens":0,"totalTokens":7}}}' "$rid")"
       fi
-     ;;
+       ;;
    esac
 done
 `;
