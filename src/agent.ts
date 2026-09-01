@@ -27,6 +27,13 @@ export interface AgentOptions {
 	model?: string;
 	/** session id to --resume (omit for a fresh session) */
 	resume?: string;
+	/**
+	 * The Slack session key (thread_ts) this process serves. Backends that store
+	 * their own per-session files (e.g. Hermes' `HERMES_HOME`) use it to isolate
+	 * storage by session so a session's state can't cross-read another's. Unused
+	 * by backends that don't need a per-session home.
+	 */
+	sessionKey?: string;
 	/** appended to --append-system-prompt */
 	appendSystemPrompt?: string;
 	/**

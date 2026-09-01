@@ -31,6 +31,7 @@ function makeCtx(overrides?: Partial<CommandContext>): CommandContext {
 		allManagers: new Map([["work", mockManager]]),
 		projectName: "work",
 		baseWorkDir: "/mock/work",
+		agentKind: "claude",
 		...overrides,
 	};
 }
@@ -88,6 +89,31 @@ describe("handleCommand", () => {
 		expect(result).toBeTruthy();
 		expect(result?.forwardToClaude).toBe(undefined);
 		expect(result?.text.includes("/cc:")).toBeTruthy();
+	});
+
+	it("/cc:<command> is a no-op forward on the pi backend (text as prompt, not a forward)", () => {
+		const result = handleCommand("/cc:mycommand", makeCtx({ agentKind: "pi" }));
+		expect(result).toBeTruthy();
+		expect(result?.forwardToClaude).toBe(undefined); // not forwarded
+		expect(result?.text).toContain("pi");
+	});
+
+	it("/cc:<command> is a no-op forward on the hermes backend", () => {
+		const result = handleCommand(
+			"/cc:mycommand",
+			makeCtx({ agentKind: "hermes" }),
+		);
+		expect(result).toBeTruthy();
+		expect(result?.forwardToClaude).toBe(undefined);
+		expect(result?.text).toContain("hermes");
+	});
+
+	it("/cc:<command> still forwards on the claude backend", () => {
+		const result = handleCommand(
+			"/cc:mycommand",
+			makeCtx({ agentKind: "claude" }),
+		);
+		expect(result?.forwardToClaude).toBe("/mycommand");
 	});
 
 	it("leading space + /help works (Slack DM workaround)", () => {
@@ -168,6 +194,53 @@ describe("/resume command", () => {
 		const result = handleCommand("/resume nonexistent-id", makeCtx());
 		expect(result).toBeTruthy();
 		expect(result?.text.includes("No session matching")).toBeTruthy();
+	});
+
+	it("no arg on the pi backend is unsupported (points at /sessions + /resume <id>)", () => {
+		const result = handleCommand("/resume", makeCtx({ agentKind: "pi" }));
+		expect(result).toBeTruthy();
+		expect(result?.text).toContain("pi");
+		expect(result?.text).toContain("/sessions");
+		expect(result?.text).toContain("/resume <id>");
+	});
+
+	it("no arg on the hermes backend is unsupported", () => {
+		const result = handleCommand("/resume", makeCtx({ agentKind: "hermes" }));
+		expect(result).toBeTruthy();
+		expect(result?.text).toContain("hermes");
+	});
+
+	it("/resume <id> reattaches by id on the pi backend without a claude store lookup", () => {
+		let captured: string | undefined;
+		const manager = makeCtx().manager;
+		(
+			manager as unknown as { setResumeId: (k: string, id: string) => void }
+		).setResumeId = (k: string, id: string) => {
+			captured = id;
+		};
+		const result = handleCommand(
+			"/resume sess-pi-42",
+			makeCtx({ agentKind: "pi", manager }),
+		);
+		expect(result).toBeTruthy();
+		expect(result?.text).toContain("sess-pi-42");
+		expect(captured).toBe("sess-pi-42");
+	});
+
+	it("/resume <id> reattaches by id on the hermes backend", () => {
+		let captured: string | undefined;
+		const manager = makeCtx().manager;
+		(
+			manager as unknown as { setResumeId: (k: string, id: string) => void }
+		).setResumeId = (k: string, id: string) => {
+			captured = id;
+		};
+		const result = handleCommand(
+			"/resume sess-h-7",
+			makeCtx({ agentKind: "hermes", manager }),
+		);
+		expect(result).toBeTruthy();
+		expect(captured).toBe("sess-h-7");
 	});
 });
 

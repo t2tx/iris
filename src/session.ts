@@ -233,6 +233,7 @@ export class SessionManager {
 				model: this.cfg.model,
 				appendSystemPrompt,
 				sessionDir: this.cfg.sessionDir,
+				sessionKey: threadTs,
 				resume,
 			},
 			this.cfg.mode,

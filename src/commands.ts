@@ -8,6 +8,7 @@
 import { type Dirent, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { listClaudeSessions } from "./claude-sessions.js";
+import type { AgentKind } from "./config.js";
 import type { SessionManager } from "./session.js";
 
 export interface CommandContext {
@@ -16,6 +17,8 @@ export interface CommandContext {
 	allManagers: Map<string, SessionManager>;
 	projectName: string;
 	baseWorkDir: string;
+	/** Which agent backend this session runs (claude | pi | hermes). */
+	agentKind: AgentKind;
 }
 
 export interface CommandResult {
@@ -93,6 +96,17 @@ export function handleCommand(
 				text: `_Usage: \`${CC_PREFIX}<command> [args]\` — runs Claude Code's \`/<command>\` (custom commands / skills only)._`,
 			};
 		}
+		// /cc: forwards to the underlying CLI's own slash namespace, which only
+		// Claude Code has a headless path for. pi/hermes get the text verbatim as a
+		// normal prompt instead of a meaningless forward.
+		if (ctx.agentKind !== "claude") {
+			return {
+				text:
+					`_\`/cc:\` forwards to Claude Code's \`/<command>\`; this thread runs the ` +
+					`\`${ctx.agentKind}\` backend, which has no such namespace. ` +
+					"_Type your request normally and it is sent as a prompt._",
+			};
+		}
 		return { forwardToClaude: `/${rest}`, text: "" };
 	}
 
@@ -121,16 +135,16 @@ function cmdHelp(): CommandResult {
 			"`/help` — Show this help",
 			"`/status` — Current session info",
 			"`/sessions` — All active sessions",
-			"`/restart` — Restart the Claude process, keeping the conversation (resume)",
+			"`/restart` — Restart the agent process, keeping the conversation (resume)",
 			"`/clear` — Reset the conversation (new session, no history; alias `/new`)",
 			"`/switch <name>` — Switch working directory (searches under base work_dir)",
 			"`/switch` — Show current working directory",
 			"`/switch -` — Revert to default working directory",
-			"`/resume` — List past Claude sessions (to reconnect after a restart)",
+			"`/resume` — List past sessions (to reconnect after a restart)",
 			"`/resume <id>` — Reconnect this thread to a past session",
 			"`/summary` — Summarize this conversation for handover",
 			"`/summary <request>` — Summarize with your own instruction",
-			"`/cc:<command> [args]` — Run Claude Code's `/<command>` (custom commands / skills; built-in interactive commands are not available headless)",
+			"`/cc:<command> [args]` — Run Claude Code's `/<command>` (Claude backend only; custom commands / skills — pi/hermes threads get the text as a plain prompt)",
 		].join("\n"),
 	};
 }
@@ -307,17 +321,29 @@ function preview(text: string, max = 60): string {
 }
 
 /**
- * /resume — reconnect this thread to a past Claude session.
+ * /resume — reconnect this thread to a past session of the session's backend.
  *
  * Iris keeps the thread⇄session mapping in memory, so a restart (e.g. an
- * update) drops it and the next message starts fresh. Claude's own session
- * files survive, so /resume lists them and lets the user reattach.
+ * update) drops it and the next message starts fresh. Backend session files
+ * survive: Claude's (`~/.claude/projects/…`) is scanned for a listing; pi/hermes
+ * resume from their own stores, which Iris does not scan, so `/resume <id>`
+ * reattaches by id (backend-agnostic) while the no-arg listing is Claude-only.
  */
 function cmdResume(arg: string, ctx: CommandContext): CommandResult {
 	const workDir = ctx.manager.getEffectiveWorkDir(ctx.sessionKey);
+	const kind = ctx.agentKind;
 
-	// No arg → list recent sessions for this work dir.
+	// No arg → list past sessions. Only Claude's on-disk store is introspectable
+	// here; for pi/hermes point the user at the active list + manual reattach.
 	if (!arg) {
+		if (kind !== "claude") {
+			return {
+				text:
+					`_\`/resume\` does not list past \`${kind}\` sessions yet._ \n` +
+					"_Use `/sessions` for active sessions, or `/resume <id>` to " +
+					"reconnect by id — it resumes on your next message._",
+			};
+		}
 		const sessions = listClaudeSessions(workDir);
 		if (sessions.length === 0) {
 			return { text: `_No past Claude sessions found under \`${workDir}\`._` };
@@ -326,12 +352,12 @@ function cmdResume(arg: string, ctx: CommandContext): CommandResult {
 			const when = new Date(s.mtimeMs).toLocaleString();
 			const turns = s.turns ? ` _${s.turns} turns_` : "";
 			const head = s.firstPrompt
-				? `\n   📌 start: ${preview(s.firstPrompt)}`
+				? `\n    📌 start: ${preview(s.firstPrompt)}`
 				: "";
 			// Show the last few prompts, skipping any that duplicate the start line.
 			const recent = s.recentPrompts
 				.filter((p) => p !== s.firstPrompt)
-				.map((p) => `\n   🔵 ${preview(p)}`)
+				.map((p) => `\n    🔵 ${preview(p)}`)
 				.join("");
 			return `• \`${s.id}\` (${when})${turns}${head}${recent}`;
 		});
@@ -344,17 +370,28 @@ function cmdResume(arg: string, ctx: CommandContext): CommandResult {
 		};
 	}
 
-	// /resume <id> → attach this thread to the given session id.
-	const sessions = listClaudeSessions(workDir, 100);
-	const match = sessions.find((s) => s.id === arg || s.id.startsWith(arg));
-	if (!match) {
+	// /resume <id> → reattach by session id. Backend-agnostic: Iris only needs
+	// the id; the backend resumes it on the next message (--session / session/resume).
+	if (kind === "claude") {
+		// Best-effort validate against Claude's on-disk store for a friendlier
+		// error + preview, but the reattach itself is id-only.
+		const sessions = listClaudeSessions(workDir, 100);
+		const match = sessions.find((s) => s.id === arg || s.id.startsWith(arg));
+		if (!match) {
+			return {
+				text: `_No session matching \`${arg}\` under \`${workDir}\`. Try \`/resume\` to list._`,
+			};
+		}
+		ctx.manager.setResumeId(ctx.sessionKey, match.id);
 		return {
-			text: `_No session matching \`${arg}\` under \`${workDir}\`. Try \`/resume\` to list._`,
+			text: `🔗 Reconnected to \`${match.id}\`. Your next message continues that conversation.`,
 		};
 	}
-	ctx.manager.setResumeId(ctx.sessionKey, match.id);
+
+	// pi/hermes: reattach by id without a store lookup.
+	ctx.manager.setResumeId(ctx.sessionKey, arg);
 	return {
-		text: `🔗 Reconnected to \`${match.id}\`. Your next message continues that conversation.`,
+		text: `🔗 Reconnecting this thread to session \`${arg}\` (${kind}). Your next message resumes it.`,
 	};
 }
 

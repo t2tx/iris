@@ -1,27 +1,27 @@
 # Iris
 
-Slack ⇄ Claude Code ブリッジ — 最小構成・自己ホスト型。
+Slack ⇄ AIエージェント・ブリッジ — 最小構成・自己ホスト型。
 
 <p align="right"><a href="./README.en.md">English</a></p>
 
-Iris は Slack ワークスペースと、ローカルで動く [Claude Code](https://claude.com/claude-code) CLI をつなぎます。Slack のスレッドから Claude に話しかけると、Iris が Claude Code を常駐プロセスとして起動し、出力をストリームで返し、ツール実行の許可をクリック可能なボタンとして提示します。
+Iris は Slack ワークスペースと、ローカルで動く **エージェント CLI**（[Claude Code](https://claude.com/claude-code) ・ [**Pi**](https://github.com/earendil-works/pi) ・ **Hermes**）をつなぎます。Slack のスレッドからエージェントに話しかけると、Iris がそのエージェントを常駐プロセスとして起動し、出力をストリームで返し、ツール実行の許可をクリック可能なボタンとして提示します。
 
-これは [cc-connect](https://github.com/chenhg5/cc-connect)（14 エージェント × 13 プラットフォーム対応の汎用ブリッジ）の設計思想だけを参考に、**Slack + Claude Code の組み合わせだけ**に絞って意図的に小さく作り直したものです。プラグインレジストリ・マルチプラットフォーム/エージェントの抽象・provider 切替・cron・relay・TTS などは持ちません。約 700 行（cc-connect の約 1/100）。
+これは [cc-connect](https://github.com/chenhg5/cc-connect)（14 エージェント × 13 プラットフォーム対応の汎用ブリッジ）の設計思想だけを参考に、**Slack ＋ 選択可能なエージェント・バックエンド（Claude Code / Pi / Hermes）**に絞って意図的に小さく作り直したものです。プラグインレジストリ・マルチプラットフォームの抽象・provider 切替・cron・relay・TTS などは持ちません。約 700 行（cc-connect の約 1/100）。
 
 > 虹の女神 **Iris**（神々と人間をつなぐ伝令）に由来。Hermes / Mnemosyne / Argus と同じ神話系の命名。
 
 ## しくみ
 
 ```
-Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ claude.ts ──▶ claude CLI
-   ▲   block_actions                  thread_ts          stream-json (stdin/stdout)
-   └──── chat.postMessage ◀── format.ts ◀──────────────── events
+Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ <backend> ──▶ agent CLI
+     ▲   block_actions                  thread_ts      (claude.ts | pi.ts | hermes.ts)
+     └──── chat.postMessage ◀── format.ts ◀──────────────── events
 ```
 
-- **1 Slack スレッド = 1 Claude セッション = 1 常駐プロセス**
-- Claude を `--input-format stream-json --output-format stream-json --permission-prompt-tool stdio` で起動。Iris は stdin にユーザーメッセージ / 権限応答を書き、stdout の JSON イベントストリームをパースします。
-- 権限要求（`control_request` → `can_use_tool`）は Block Kit の 許可 / 拒否 ボタンになり、クリックは `control_response` で Claude に返されます。
-- プロセスが終了しても `session_id` を保持し、次のメッセージで `--resume` により会話を継続します。
+- **1 Slack スレッド = 1 エージェント・セッション = 1 常駐プロセス**
+- Claude Code は `--input-format stream-json --output-format stream-json --permission-prompt-tool stdio` で起動。Pi / Hermes はそれぞれ独自プロトコル。Iris は stdin にユーザーメッセージ / 権限応答を書き、stdout の JSON イベントストリームをパースします。
+- 権限要求は Block Kit の 許可 / 拒否 ボタンになり、クリックはエージェントへ返されます（Claude Code は `control_request`、Hermes は ACP `session/request_permission`、Pi は独自の RPC を経由）。
+- プロセスが終了しても `session_id` を保持し、次のメッセージで会話を継続します（Claude Code は `--resume`、Pi は `--session`、Hermes は `session/resume`）。
 
 ## セットアップ
 
@@ -102,8 +102,9 @@ allow_users = ["U09XXXXXXX"]      # この人の DM に反応
 ### エージェント・バックエンドの選定
 
 Iris は既定で [Claude Code](https://claude.com/claude-code)（`claude` CLI）を駆動します。
-[**Pi** コーディング・エージェント](https://github.com/earendil-works/pi)を
-`agent = "pi"` で選ぶこともできます（プロジェクト単位、またはトップレベルの既定で）。
+[**Pi** コーディング・エージェント](https://github.com/earendil-works/pi)（`agent = "pi"`）
+や、[**Hermes**](https://github.com/hermes-agent/hermes)（`agent = "hermes"`）も選べます
+（プロジェクト単位、またはトップレベルの既定で）。
 
 - トップレベルの `agent` キーでバックエンドを選定（既定 `claude`、各プロジェクトで上書き可）。
 - 既定の Claude バックエンドは何も変更不要。`agent` 未指定 = `claude`。
@@ -118,12 +119,22 @@ name = "pi-lab"
 work_dir = "/path/to/your/repo"
 allow_users = ["U09XXXXXXX"]
 # agent = "pi"             # プロジェクト単位の指定（省略時はトップレベルを継承）
+
+# もしくは Hermes を ACP（Agent Client Protocol）経由で駆動:
+# agent = "hermes"
+# hermes_bin = "hermes"     # Hermes CLI のパス（既定 "hermes"。PATH に無ければこのパスを指定）
 ```
 
 - **Pi のインストール**: Iris は `pi` CLI を起動するだけで、インストールは行いません。
   Pi のインストール・認証は [Pi リポジトリ](https://github.com/earendil-works/pi)
   の手順に従って行ってください。PATH に無ければ `pi_bin` でパスを指定します。
-- 両バックエンドとも Slack に向けて同じ面（権限ボタン・進捗表示・セッション再開）を
+- **Hermes の運転**: Iris は `hermes acp` を起動するだけで、インストールも model 設定も
+  行いません。Agent Client Protocol（ACP）を話す `hermes acp` に対するその ACP 依存
+  （`agent-client-protocol`）の確保・model 設定は Hermes 側の手順で済ませます。PATH に
+  無ければ `hermes_bin` でパスを指定します。3 バックエンドは同一の outbox / セッション再開
+  規約を持ち、違いは wire プロトコルのみ（Claude Code = `stream-json`＋標準の権限ツール、
+  Pi = 独自 RPC、Hermes = ACP / JSON-RPC）。
+- 全バックエンドとも Slack に向けて同じ面（権限ボタン・進捗表示・セッション再開）を
   提示します。違いは駆動する CLI のみです。
 
 ### 4. 起動する
@@ -152,8 +163,9 @@ iris status     # launchd の稼働確認（macOS のみ）
 |-----|------|------|
 | `bot_token` / `app_token` | `[slack]` | Slack トークン（`xoxb-` / `xapp-`） |
 | `claude_bin` | トップレベル | claude CLI のパス（既定 `claude`） |
-| `agent` | トップレベル / 各 project | バックエンド `claude` \| `pi`（既定 `claude`） |
+| `agent` | トップレベル / 各 project | バックエンド `claude` \| `pi` \| `hermes`（既定 `claude`） |
 | `pi_bin` | トップレベル | Pi CLI のパス（既定 `pi`、`agent = "pi"` のとき使用） |
+| `hermes_bin` | トップレベル | Hermes CLI のパス（既定 `hermes`、`agent = "hermes"` のとき使用。ACP `hermes acp` を駆動） |
 | `permission_mode` | トップレベル / 各 project | `manual` \| `acceptEdits` \| `auto` |
 | `log_level` | トップレベル | `debug` \| `info` \| `warn` \| `error`（既定 `info`） |
 | `idle_ttl_min` | トップレベル | 無操作が続いたセッションのプロセスを終了するまでの分数（既定 `1440`＝24h、`0` で無効）。環境変数 `IRIS_IDLE_TTL_MIN` で上書き可 |
@@ -193,9 +205,9 @@ iris status     # launchd の稼働確認（macOS のみ）
 - AI → ユーザーへの生成ファイル送信
 - スラッシュコマンド（`/help` `/status` `/sessions` `/restart` `/clear` `/switch` `/resume` `/summary` `/cc:`）
 - `/switch <name>` でセッションごとに作業ディレクトリを切り替え（`work_dir` 配下を検索）
-- `/resume` で過去の Claude セッション一覧を表示（ターン数・直近の発言つき）、`/resume <id>` で再接続
+- `/resume` で過去のセッション一覧を表示（claude のみ・ターン数・直近の発言つき）、`/resume <id>` でセッション id で再接続（全 backend で可）
 - `/summary` で現在の会話を引き継ぎ用に要約（コードブロックで出力）、`/summary <要望>` で指示を指定
-- `/cc:<command> [args]` で Claude Code 側の `/<command>` を実行（カスタムコマンド/スキルは stream-json モードで展開される。`/context` `/compact` 等の組み込み対話コマンドは headless では利用不可）
+- `/cc:<command> [args]` で Claude Code 側の `/<command>` を実行（**Claude バックエンドのみ**。pi/hermes スレッドではテキストをそのままプロンプトとして渡します）
 - 複数プロジェクトのルーティング（TOML config）
 - アイドルセッションの自動終了：無操作が `idle_ttl_min` 分（既定 24h）続いたセッションの Claude プロセスを終了してメモリを解放。停止時はスレッドに一時停止を通知し、次のメッセージで `--resume` により再開（再開も通知）するため、文脈は失われない
 
