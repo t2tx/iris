@@ -64,6 +64,18 @@ export interface AgentOptions {
  * `instanceId` is a per-process generation id; a stale permission click is
  * rejected if the live process's id no longer matches.
  */
+/**
+ * A model that a backend can run a session with. Minimal view of the backend's
+ * own model record (Pi's `Model<any>`), projected to the fields Iris needs to
+ * list, display, and switch models on a live session.
+ */
+export interface AvailableModel {
+	provider: string;
+	id: string;
+	name?: string;
+	reasoning?: boolean;
+}
+
 export interface AgentProcess extends EventEmitter {
 	/** Unique per spawned process; used to reject stale permission clicks. */
 	readonly instanceId: number;
@@ -84,6 +96,20 @@ export interface AgentProcess extends EventEmitter {
 	): void;
 	/** Terminate the process tree. */
 	close(): void;
+
+	/**
+	 * Switch the model of a live session without respawning (keeps the
+	 * conversation context). Only supported by backends that expose a runtime
+	 * model-switch RPC (e.g. Pi). Absent on backends without runtime switching.
+	 */
+	setModel?(provider: string, modelId: string): void;
+	/**
+	 * List the models a backend can run a session with. Backends without runtime
+	 * model discovery (e.g. Claude Code) do not implement this.
+	 */
+	listModels?(): Promise<AvailableModel[]>;
+	/** The model a backend is currently using for this session, if known. */
+	currentModel?(): AvailableModel | undefined;
 }
 
 /**

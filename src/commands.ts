@@ -19,6 +19,8 @@ export interface CommandContext {
 	baseWorkDir: string;
 	/** Which agent backend this session runs (claude | pi | hermes). */
 	agentKind: AgentKind;
+	/** The project's default model ("provider/id"), shown as the base in /model. */
+	model?: string;
 }
 
 export interface CommandResult {
@@ -33,7 +35,10 @@ export interface CommandResult {
 	forwardToClaude?: string;
 }
 
-type CommandHandler = (arg: string, ctx: CommandContext) => CommandResult;
+type CommandHandler = (
+	arg: string,
+	ctx: CommandContext,
+) => CommandResult | Promise<CommandResult>;
 
 const COMMANDS: Record<string, CommandHandler> = {
 	help: () => cmdHelp(),
@@ -45,6 +50,7 @@ const COMMANDS: Record<string, CommandHandler> = {
 	switch: (arg, ctx) => cmdSwitch(arg, ctx),
 	resume: (arg, ctx) => cmdResume(arg, ctx),
 	summary: (arg) => cmdSummary(arg),
+	model: (arg, ctx) => cmdModel(arg, ctx),
 };
 
 /**
@@ -75,10 +81,10 @@ const SUMMARY_WRAP_INSTRUCTION =
 /** Prefix that forwards a Claude Code slash command through to Claude. */
 const CC_PREFIX = "/cc:";
 
-export function handleCommand(
+export async function handleCommand(
 	message: string,
 	ctx: CommandContext,
-): CommandResult | null {
+): Promise<CommandResult | null> {
 	const trimmed = message.trim();
 	// In Slack DMs, users must prepend a space before "/" to bypass Slack's
 	// native slash command interception. The trim() above strips that space.
@@ -111,7 +117,7 @@ export function handleCommand(
 	const name = raw.slice(1).toLowerCase();
 
 	const handler = COMMANDS[name];
-	if (handler) return handler(arg, ctx);
+	if (handler) return await handler(arg, ctx);
 
 	// A bare "/word" (single token, no spaces) that matches no command is
 	// almost certainly a typo — report it instead of forwarding to Claude.
@@ -139,6 +145,9 @@ function cmdHelp(): CommandResult {
 			"`/resume <id>` — Reconnect this thread to a past session",
 			"`/summary` — Summarize this conversation for handover",
 			"`/summary <request>` — Summarize with your own instruction",
+			"`/model` — List available models (Pi sessions)",
+			"`/model <provider/id>` — Switch this session's model (Pi), keeping context",
+			"`/model -` — Revert this session's model to the project default",
 			"`/cc:<command> [args]` — Run Claude Code's `/<command>` (Claude backend only; custom commands / skills — pi/hermes threads get the text as a plain prompt)",
 		].join("\n"),
 	};
@@ -400,4 +409,134 @@ function cmdSummary(arg: string): CommandResult {
 	// text is unused — tryCommand forwards forwardToClaude to Claude instead.
 	const prompt = (arg || DEFAULT_SUMMARY_PROMPT) + SUMMARY_WRAP_INSTRUCTION;
 	return { text: "", forwardToClaude: prompt };
+}
+
+/** The "provider/id" a session currently targets, for the ✓ marker in /model. */
+function currentModelKey(ctx: CommandContext): string | undefined {
+	const ov = ctx.manager.getModelOverride(ctx.sessionKey);
+	if (ov) return `${ov.provider}/${ov.modelId}`;
+	const cur = ctx.manager.currentModelFor(ctx.sessionKey);
+	return cur ? `${cur.provider}/${cur.id}` : undefined;
+}
+
+/** Best-effort model list: a timeout / exit rejection is treated as "unavailable". */
+async function safeListModels(
+	ctx: CommandContext,
+	key: string,
+): Promise<
+	| Array<{ provider: string; id: string; name?: string; reasoning?: boolean }>
+	| undefined
+> {
+	try {
+		return await ctx.manager.listModelsFor(key);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * /model — list or switch the model for this session (Pi; a runtime model switch
+ * is a Pi capability). Non-Pi backends have no runtime switch, so a switch is
+ * recorded for the next spawn but a live session cannot be re-modelled.
+ *   - No arg: list the models this session can run. A not-yet-started session
+ *     shows the project default + usage instead of spawning just to list (Q2=A).
+ *   - `/model <provider/id>`: switch. A live Pi process is pushed the switch
+ *     immediately (keeps context); otherwise it applies on the next message. Bare
+ *     ids are rejected — the shape must be provider/id so Pi's set_model RPC is
+ *     well-formed (Q3=A).
+ *   - `/model -`: revert to the project's default model (Q7=A).
+ */
+async function cmdModel(
+	arg: string,
+	ctx: CommandContext,
+): Promise<CommandResult> {
+	const key = ctx.sessionKey;
+	const def = ctx.model || "(unconfigured)";
+
+	// /model - → revert to the project's default model for this session.
+	if (arg === "-") {
+		const had = ctx.manager.getModelOverride(key);
+		if (!had) {
+			return {
+				text: `No \`/model\` override in effect (default is \`${def}\`).`,
+			};
+		}
+		ctx.manager.clearModelOverride(key);
+		return {
+			text: `↩️ Reverted this session's model to the project default: \`${def}\`.`,
+		};
+	}
+
+	// No arg → list the available models.
+	if (!arg) {
+		const models = await safeListModels(ctx, key);
+		if (models && models.length > 0) {
+			const current = currentModelKey(ctx);
+			const lines = models.map((m) => {
+				const id = `${m.provider}/${m.id}`;
+				const name = m.name ? ` ${m.name}` : "";
+				const mark = `${m.reasoning ? " 🔎" : ""}${id === current ? " ✓" : ""}`;
+				return `• \`${id}\`${name}${mark}`;
+			});
+			return {
+				text: [
+					"*Available models*:",
+					...lines,
+					"_Switch with_ `/model <provider/id>`._",
+				].join("\n"),
+			};
+		}
+		// A not-yet-started session has no live Pi to ask, so we do not spawn
+		// just to list — show the project default + usage instead.
+		return {
+			text: [
+				"*Available models*:",
+				`_This session has not started yet — Pi's list is not available until you send a message._`,
+				`_Project default: \`${def}\``,
+				"_Switch with_ `/model <provider/id>` — it applies on your next message.",
+			].join("\n"),
+		};
+	}
+
+	// /model <provider/id> — strict shape (reject bare ids / trailing slash).
+	const slash = arg.indexOf("/");
+	if (slash <= 0 || slash === arg.length - 1) {
+		return {
+			text: `_Usage: \`/model <provider/id>\` (e.g. \`/model anthropic/claude-sonnet\`). Bare ids are not accepted; \`/model -\` reverts to the project default._`,
+		};
+	}
+	const provider = arg.slice(0, slash);
+	const modelId = arg.slice(slash + 1);
+
+	// If a live Pi session is reachable, validate the model name against what
+	// Pi reports so a typo / stale models.json entry is caught now, not after
+	// a spawn.
+	const models = await safeListModels(ctx, key);
+	if (models && models.length > 0) {
+		const found = models.some(
+			(m) => m.provider === provider && m.id === modelId,
+		);
+		if (!found) {
+			const available = models
+				.map((m) => `${m.provider}/${m.id}`)
+				.sort()
+				.join(", ");
+			return {
+				text: `_Model \`${provider}/${modelId}\` is not available for this session. Available: ${available}_`,
+			};
+		}
+	}
+
+	ctx.manager.setSessionModel(key, provider, modelId);
+
+	// Did we re-model a live session, or just schedule it for the next spawn?
+	const info = ctx.manager.getSessionInfo(key);
+	if (info?.alive && ctx.agentKind === "pi") {
+		return {
+			text: `🔄 Switched this session's model to \`${provider}/${modelId}\`.`,
+		};
+	}
+	return {
+		text: `📌 Set this session's model to \`${provider}/${modelId}\` — it takes effect on your next message.`,
+	};
 }

@@ -251,3 +251,148 @@ test("session-scoped outbox prompt follows /switch work-dir override", () => {
 		mgr.closeAll();
 	}
 });
+
+/**
+ * A fake process that supports the runtime model-switching surface (setModel /
+ * listModels / currentModel) and can be killed + respawned, so we can assert that
+ * a /model override both pushes to a live process and survives a respawn.
+ */
+function makeModelProcess(): AgentProcess & {
+	set: Array<{ p: string; m: string }>;
+} {
+	const ee = new EventEmitter();
+	const state = { dead: false };
+	const set: Array<{ p: string; m: string }> = [];
+	const proc = Object.assign(ee, {
+		instanceId: 1,
+		isAlive: () => !state.dead,
+		getSessionId: () => "fake-sid",
+		getPid: () => undefined as number | undefined,
+		send: () => {},
+		respondPermission: () => {},
+		close: () => {
+			state.dead = true;
+			ee.emit("exit", 0, null);
+		},
+		setModel: (p: string, m: string) => {
+			set.push({ p, m });
+		},
+		listModels: async () => [
+			{ provider: "anthropic", id: "sonnet" },
+			{ provider: "deepseek-official", id: "deepseek-v4-flash" },
+		],
+		currentModel: () => {
+			const last = set.at(-1);
+			return last ? { provider: last.p, id: last.m } : undefined;
+		},
+		set,
+	}) as unknown as AgentProcess & { set: Array<{ p: string; m: string }> };
+	return proc;
+}
+
+test("a /model override applies to the next spawn and survives a respawn", async () => {
+	const spawned: string[] = [];
+	const mgr = new SessionManager({
+		bin: "unused",
+		workDir: process.cwd(),
+		mode: "auto",
+		createProcess: (opts: AgentOptions, _mode: PermissionMode) => {
+			const proc = makeModelProcess();
+			spawned.push(opts.model ?? "");
+			return proc;
+		},
+	});
+	try {
+		// 1) Set the override BEFORE any spawn; the first spawn must pick it up.
+		mgr.setSessionModel("t1", "deepseek-official", "deepseek-v4-flash");
+		mgr.send("t1", "hi", noopHandlers);
+		expect(spawned).toHaveLength(1);
+		expect(spawned[0]).toBe("deepseek-official/deepseek-v4-flash");
+
+		// 2) Kill the process; the override survives, so the respawn still uses it.
+		expect(mgr.killSession("t1")).toBe(true);
+		await waitFor(() => mgr.getSessionInfo("t1")?.alive === false);
+		mgr.send("t1", "again", noopHandlers);
+		expect(spawned).toHaveLength(2);
+		expect(spawned[1]).toBe("deepseek-official/deepseek-v4-flash");
+	} finally {
+		mgr.closeAll();
+	}
+});
+
+test("a /model override pushes a live process and /model - reverts it", async () => {
+	const spawned: string[] = [];
+	let proc = makeModelProcess() as AgentProcess & {
+		set: Array<{ p: string; m: string }>;
+	};
+	const mgr = new SessionManager({
+		bin: "unused",
+		workDir: process.cwd(),
+		mode: "auto",
+		model: "anthropic/sonnet",
+		createProcess: (_opts: AgentOptions, _mode: PermissionMode) => {
+			proc = makeModelProcess() as AgentProcess & {
+				set: Array<{ p: string; m: string }>;
+			};
+			spawned.push(_opts.model ?? "");
+			return proc;
+		},
+	});
+	try {
+		// Spawn on the project default first (no override yet).
+		mgr.send("t1", "hi", noopHandlers);
+		expect(spawned).toEqual(["anthropic/sonnet"]);
+
+		// While live, switch the model — the live process must be pushed it.
+		mgr.setSessionModel("t1", "deepseek-official", "deepseek-v4-flash");
+		expect(proc.set).toEqual([
+			{
+				p: "deepseek-official",
+				m: "deepseek-v4-flash",
+			},
+		]);
+
+		// Reverting via /model - pushes the project default back to the live proc.
+		mgr.clearModelOverride("t1");
+		expect(proc.set).toEqual([
+			{
+				p: "deepseek-official",
+				m: "deepseek-v4-flash",
+			},
+			{
+				p: "anthropic",
+				m: "sonnet",
+			},
+		]);
+		expect(mgr.getModelOverride("t1")).toBeUndefined();
+	} finally {
+		mgr.closeAll();
+	}
+});
+
+test("listModelsFor / currentModelFor reflect a live session's model surface", async () => {
+	const proc = makeModelProcess() as AgentProcess & {
+		set: Array<{ p: string; m: string }>;
+	};
+	const mgr = new SessionManager({
+		bin: "unused",
+		workDir: process.cwd(),
+		mode: "auto",
+		createProcess: (_opts: AgentOptions, _mode: PermissionMode) => proc,
+	});
+	try {
+		// Before spawn: nothing live, so discovery returns undefined.
+		expect(await mgr.listModelsFor("t1")).toBeUndefined();
+		mgr.send("t1", "hi", noopHandlers);
+		const models = await mgr.listModelsFor("t1");
+		expect(models?.map((m) => `${m.provider}/${m.id}`)).toEqual([
+			"anthropic/sonnet",
+			"deepseek-official/deepseek-v4-flash",
+		]);
+		// currentModel reflects the last switch pushed to the live process.
+		mgr.setSessionModel("t1", "deepseek-official", "deepseek-v4-flash");
+		expect(mgr.currentModelFor("t1")?.id).toBe("deepseek-v4-flash");
+	} finally {
+		mgr.closeAll();
+	}
+});
