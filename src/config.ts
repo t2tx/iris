@@ -105,9 +105,9 @@ const PERMISSION_MODES: readonly PermissionMode[] = [
  * compatible); `pi` selects the Pi coding-agent backend. A top-level `agent`
  * sets the default and each `[[projects]]` may override it.
  */
-export type AgentKind = "claude" | "pi";
+export type AgentKind = "claude" | "pi" | "hermes";
 
-const AGENT_KINDS: readonly AgentKind[] = ["claude", "pi"];
+const AGENT_KINDS: readonly AgentKind[] = ["claude", "pi", "hermes"];
 
 export interface ProjectConfig {
 	name: string;
@@ -126,6 +126,8 @@ export interface IrisConfig {
 	claudeBin: string;
 	/** Path to the Pi CLI (used when a project selects agent = "pi"). */
 	piBin: string;
+	/** Path to the Hermes CLI (used when a project selects agent = "hermes"). */
+	hermesBin: string;
 	logLevel: LogLevel;
 	/** Max chars of a Bash command shown in the tool-progress line. */
 	bashProgressMax: number;
@@ -152,6 +154,7 @@ interface RawConfig {
 	slack?: { bot_token?: unknown; app_token?: unknown };
 	claude_bin?: unknown;
 	pi_bin?: unknown;
+	hermes_bin?: unknown;
 	agent?: unknown;
 	model?: unknown;
 	permission_mode?: unknown;
@@ -175,6 +178,7 @@ export function loadConfig(opts?: {
 	const { botToken, appToken } = resolveTokens(env, raw);
 	const claudeBin = str(raw.claude_bin) || "claude";
 	const piBin = str(raw.pi_bin) || "pi";
+	const hermesBin = str(raw.hermes_bin) || "hermes";
 	const defaultMode = parseMode(str(raw.permission_mode) || "manual");
 	const defaultAgent = parseAgent(str(raw.agent) || "claude");
 	const defaultModel = str(raw.model) || undefined;
@@ -187,6 +191,7 @@ export function loadConfig(opts?: {
 		appToken,
 		claudeBin,
 		piBin,
+		hermesBin,
 		logLevel,
 		bashProgressMax,
 		idleTtlMs,

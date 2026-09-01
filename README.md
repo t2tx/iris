@@ -1,16 +1,17 @@
 # Iris
 
-Slack ⇄ Claude Code bridge — minimal, self-hosted.
+Slack ⇄ AI agent bridge — minimal, self-hosted.
 
 <p align="right"><a href="./README.ja.md">日本語</a></p>
 
-Iris connects a Slack workspace to a local [Claude Code](https://claude.com/claude-code)
-CLI. You talk to Claude from a Slack thread or DM; Iris runs Claude Code as a
+Iris connects a Slack workspace to a local [**agent CLI**](https://github.com/earendil-works/pi) —
+[Claude Code](https://claude.com/claude-code), [**Pi**](https://github.com/earendil-works/pi), or
+**Hermes**. You talk to the agent from a Slack thread or DM; Iris runs it as a
 resident process, streams its output back, and turns tool-permission requests
 into clickable Slack buttons.
 
-It is a deliberately small, single-purpose tool — **Slack + Claude Code only** —
-with no plugin registry, no multi-platform/multi-agent abstraction, no provider
+It is a deliberately small tool — **Slack + a selectable agent backend** (Claude Code, Pi, or
+Hermes) — with no plugin registry, no multi-platform abstraction, no provider
 switching, cron, relay, or TTS.
 
 > Named after Iris, the Greek messenger goddess of the rainbow who relays
@@ -23,7 +24,8 @@ an excellent general-purpose bridge that connects many AI coding agents to many
 messaging platforms. We are grateful for its design ideas.
 
 Iris is **not a fork** — it is an independent implementation that distills those
-ideas down to a single combination (Slack + Claude Code) for a smaller, more
+ideas down to a small set of agent backends (Slack + Claude Code / Pi / Hermes)
+for a smaller, more
 auditable tool. What we borrowed is the *approach* (driving Claude Code over
 `stream-json`, bridging the `stdio` permission tool to chat buttons, the
 `NO_REPLY` silence marker); what we dropped is everything that exists to support
@@ -41,19 +43,21 @@ Claude Code.
 ## How it works
 
 ```
-Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ claude.ts ──▶ claude CLI
-   ▲   block_actions                  thread_ts          stream-json (stdin/stdout)
-   └──── chat.postMessage ◀── format.ts ◀──────────────── events
+Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ <backend> ──▶ agent CLI
+    ▲   block_actions                  thread_ts     (claude.ts | pi.ts | hermes.ts)
+    └──── chat.postMessage ◀── format.ts ◀──────────────── events
 ```
 
-- **One Slack thread (or DM) = one Claude session = one resident process.**
-- Claude runs with `--input-format stream-json --output-format stream-json
-  --permission-prompt-tool stdio`. Iris writes user messages / permission
-  responses to stdin and parses the JSON event stream from stdout.
-- Permission requests (`control_request` → `can_use_tool`) become Block Kit
-  Allow/Deny buttons; the click is routed back via `control_response`.
+- **One Slack thread (or DM) = one agent session = one resident process.**
+- Claude Code runs with `--input-format stream-json --output-format stream-json
+   --permission-prompt-tool stdio`; Pi and Hermes use their own protocols. Iris
+   writes user messages / permission responses to stdin and parses the JSON event
+   stream from stdout.
+- Permission requests become Block Kit Allow/Deny buttons; the click is routed
+   back to the agent. (Claude Code via `control_request`; Hermes via ACP
+   `session/request_permission`; Pi via its permission RPC.)
 - When a process dies, its `session_id` is kept so the next message resumes it
-  with `--resume`.
+   (Claude `--resume`, Pi `--session`, Hermes `session/resume`).
 
 ## Features
 
@@ -64,9 +68,9 @@ Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ claude.ts 
 - Outbound generated-file uploads
 - Slash commands (`/help` `/status` `/sessions` `/restart` `/clear` `/switch` `/resume` `/summary` `/cc:`)
 - `/switch <name>` to change the working directory per session (searches under `work_dir`)
-- `/resume` lists past Claude sessions (with turn count & recent prompts); `/resume <id>` reattaches the thread
+- `/resume` lists past Claude sessions (with turn count & recent prompts); `/resume <id>` reattaches the thread to a session by id (any backend)
 - `/summary` summarizes the current conversation for handover (output wrapped in a code block); `/summary <request>` uses your own instruction
-- `/cc:<command> [args]` runs Claude Code's own `/<command>` (custom commands / skills are expanded in stream-json mode; built-in interactive commands like `/context` `/compact` are not available headless)
+- `/cc:<command> [args]` runs Claude Code's own `/<command>` (Claude backend only — for a pi/hermes thread the text is sent as a normal prompt instead)
 - Multi-project routing via TOML
 - Idle-session reaping: a session's Claude process is closed after `idle_ttl_min` minutes idle (default 24h) to free memory; the thread gets a pause notice, and the next message resumes it via `--resume` (with a resume notice), so no conversation is lost
 - Leveled logging (`log_level`), `iris --version`
@@ -102,8 +106,9 @@ Expand-Archive iris-windows-x64.zip -DestinationPath .
 npm install -g @t2tx/iris
 ```
 
-> Iris launches the `claude` CLI; it does not handle API keys itself. The
-> `claude` CLI must already be authenticated.
+> Iris launches the configured **agent** CLI (Claude Code / Pi / Hermes — see
+> `agent` below); it does not handle API keys itself. The agent CLI must already
+> be authenticated.
 
 ## Configuration (TOML)
 
@@ -147,8 +152,9 @@ allow_users = ["U09XXXXXXX"]       # respond to this user's DMs
 ### Choosing an agent backend
 
 By default Iris drives [Claude Code](https://claude.com/claude-code) (`claude`
-CLI). It can also drive the [**Pi** coding agent](https://github.com/earendil-works/pi),
-selected per project (or as the top-level default) with `agent = "pi"`.
+CLI). It can also drive the [**Pi** coding agent](https://github.com/earendil-works/pi)
+(`agent = "pi"`) or [**Hermes**](https://github.com/hermes-agent/hermes)
+(`agent = "hermes"`), selected per project (or as the top-level default).
 
 Select the backend with the top-level `agent` key (default `claude`, override per
 project). The default Claude backend needs no change — `agent` unset means
@@ -157,13 +163,17 @@ project). The default Claude backend needs no change — `agent` unset means
 ```toml
 # Use Pi for every project (top-level default; per-project can override):
 agent = "pi"
-# pi_bin = "pi"            # PATH to the Pi CLI (default "pi"; override if not on PATH)
+# pi_bin = "pi"             # PATH to the Pi CLI (default "pi"; override if not on PATH)
+
+# Or drive Hermes via the Agent Client Protocol (ACP) instead:
+# agent = "hermes"
+# hermes_bin = "hermes"     # PATH to the Hermes CLI (default "hermes"; override if not on PATH)
 
 [[projects]]
 name = "pi-lab"
 work_dir = "/path/to/your/repo"
 allow_users = ["U09XXXXXXX"]
-# agent = "pi"            # per-project override (omitted inherits top-level)
+# agent = "pi"             # per-project override (omitted inherits top-level)
 ```
 
 **Installing Pi:** Iris only launches the `pi` CLI; it does not install it.
@@ -171,7 +181,16 @@ Install and authenticate Pi by following the
 [Pi repository](https://github.com/earendil-works/pi) instructions. Point
 `pi_bin` at it if it is not on your `PATH`.
 
-Both backends expose the same surface to Slack (tool-permission buttons,
+**Driving Hermes:** Iris launches `hermes acp`, which speaks the
+[Agent Client Protocol](https://agentclientprotocol.com/); it does not install
+it or manage its model configuration. Install Hermes, configure a model, and
+ensure its ACP dependency (`agent-client-protocol`) is available, following the
+Hermes setup instructions. Point `hermes_bin` at the CLI if it is not on your
+`PATH`. The three backends share the same outbox / session-resume contract; only
+the wire protocol differs (Claude Code = `stream-json` + `std`io permission tool,
+Pi = its own RPC, Hermes = ACP / JSON-RPC).
+
+All backends expose the same surface to Slack (tool-permission buttons,
 progress, session resume); only the underlying CLI differs.
 
 Slack app setup walkthrough: [docs/slack-setup.md](./docs/slack-setup.md) (Japanese).

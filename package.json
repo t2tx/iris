@@ -34,7 +34,8 @@
     "verify": "pnpm typecheck && pnpm check && pnpm lint:complexity && pnpm test",
     "prepublishOnly": "pnpm verify && pnpm build",
     "prepare": "command -v lefthook >/dev/null 2>&1 && lefthook install || true",
-    "smoke:pi": "tsx scripts/smoke-pi.ts"
+    "smoke:pi": "tsx scripts/smoke-pi.ts",
+    "smoke:hermes": "tsx scripts/smoke-hermes.ts"
   },
   "dependencies": {
     "@slack/bolt": "^4.2.0",

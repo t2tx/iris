@@ -10,6 +10,7 @@ import type { AgentOptions, AgentProcess, PermissionMode } from "./agent.js";
 import type { Attachment } from "./attachments.js";
 import { ensureOutboxDir, outboxDir } from "./attachments.js";
 import { ClaudeProcess } from "./backends/claude.js";
+import { HermesProcess } from "./backends/hermes.js";
 import { PiProcess } from "./backends/pi.js";
 import { handleCommand } from "./commands.js";
 import {
@@ -137,14 +138,21 @@ function projectSessionDir(projectName: string): string {
 
 const managers = new Map<string, SessionManager>();
 for (const p of config.projects) {
-	const bin = p.agent === "pi" ? config.piBin : config.claudeBin;
+	const bin =
+		p.agent === "pi"
+			? config.piBin
+			: p.agent === "hermes"
+				? config.hermesBin
+				: config.claudeBin;
 	const createProcess: (
 		opts: AgentOptions,
 		mode: PermissionMode,
 	) => AgentProcess =
 		p.agent === "pi"
 			? (opts, mode) => new PiProcess(opts, mode)
-			: (opts, mode) => new ClaudeProcess(opts, mode);
+			: p.agent === "hermes"
+				? (opts, mode) => new HermesProcess(opts, mode)
+				: (opts, mode) => new ClaudeProcess(opts, mode);
 	// The outbox is scoped per Slack session (<workDir>/.iris/outbox/<session>),
 	// so two sessions on the same work_dir cannot drain each other's files. The
 	// project base is pre-created so the agent's first per-session write has a path
@@ -418,6 +426,7 @@ async function tryCommand(
 		allManagers: managers,
 		projectName: project.name,
 		baseWorkDir: project.workDir,
+		agentKind: project.agent,
 	});
 	if (!result) return false;
 	// Log only the command name, never the full input — a command argument
