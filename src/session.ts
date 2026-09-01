@@ -109,6 +109,13 @@ export class SessionManager {
 	private readonly cfg: SessionConfig;
 	private readonly entries = new Map<string, Entry>();
 	private readonly workDirOverrides = new Map<string, string>();
+	// Per-session model override from /model: a provider+modelId the next spawn uses
+	// (and a live process is switched to immediately). Mirrors workDirOverrides so an
+	// idle reaper / killSession respawn keeps the requested model for that thread.
+	private readonly modelOverrides = new Map<
+		string,
+		{ provider: string; modelId: string }
+	>();
 	// Pending --resume target set by /resume, applied on the next spawn.
 	private readonly resumeOverrides = new Map<string, string>();
 	private readonly now: () => number;
@@ -200,6 +207,82 @@ export class SessionManager {
 		return this.workDirOverrides.get(sessionKey) ?? this.cfg.workDir;
 	}
 
+	/**
+	 * Set a per-session model override (from /model): it applies to the next spawn
+	 * of this thread AND, if a process is live and supports a runtime model switch,
+	 * is pushed to it immediately (keeping the conversation). The requested model
+	 * string is "provider/modelId". Does not reject an unknown model — callers that
+	 * can validate via a live session (listModelsFor) should do so first.
+	 */
+	setSessionModel(sessionKey: string, provider: string, modelId: string): void {
+		this.modelOverrides.set(sessionKey, { provider, modelId });
+		const entry = this.entries.get(sessionKey);
+		if (entry?.proc.isAlive() && entry.proc.setModel) {
+			entry.proc.setModel(provider, modelId);
+		}
+	}
+
+	/**
+	 * Clear a per-session model override (/model -). Reverts to the project's default
+	 * model on the next spawn, and, if a process is live, re-sends setModel with that
+	 * default so the switch is immediate. If the default is not in "provider/id" form
+	 * (e.g. unset), an already-live process is left on its current model (the default
+	 * only takes effect on a fresh spawn).
+	 */
+	clearModelOverride(sessionKey: string): void {
+		this.modelOverrides.delete(sessionKey);
+		const entry = this.entries.get(sessionKey);
+		if (entry?.proc.isAlive() && entry.proc.setModel) {
+			const model = this.cfg.model;
+			if (model) {
+				const idx = model.indexOf("/");
+				if (idx > 0 && idx < model.length - 1) {
+					entry.proc.setModel(model.slice(0, idx), model.slice(idx + 1));
+				}
+			}
+		}
+	}
+
+	/** The current per-session model override, if any. */
+	getModelOverride(
+		sessionKey: string,
+	): { provider: string; modelId: string } | undefined {
+		return this.modelOverrides.get(sessionKey);
+	}
+
+	/**
+	 * Ask a live session which models it can run. Returns undefined when there is no
+	 * live process or the backend does not support runtime model discovery — callers
+	 * then fall back to the project's configured model instead of spawning.
+	 */
+	async listModelsFor(sessionKey: string): Promise<
+		| Array<{
+				provider: string;
+				id: string;
+				name?: string;
+				reasoning?: boolean;
+		  }>
+		| undefined
+	> {
+		const proc = this.entries.get(sessionKey)?.proc;
+		if (!proc?.isAlive() || !proc.listModels) return undefined;
+		return proc.listModels();
+	}
+
+	/** The model a live session currently reports, if known. */
+	currentModelFor(sessionKey: string):
+		| {
+				provider: string;
+				id: string;
+				name?: string;
+				reasoning?: boolean;
+		  }
+		| undefined {
+		const proc = this.entries.get(sessionKey)?.proc;
+		if (!proc?.isAlive() || !proc.currentModel) return undefined;
+		return proc.currentModel();
+	}
+
 	/** Get the live process for a thread, spawning (or resuming) as needed. */
 	private ensure(threadTs: string, handlers: ThreadHandlers): AgentProcess {
 		const existing = this.entries.get(threadTs);
@@ -218,6 +301,12 @@ export class SessionManager {
 		const resumingAfterIdle = existing?.idleClosed === true && Boolean(resume);
 		this.resumeOverrides.delete(threadTs);
 		const workDir = this.workDirOverrides.get(threadTs) ?? this.cfg.workDir;
+		// A /model override for this thread takes precedence over the project's
+		// default model; without an override the project cfg.model is used as before.
+		const override = this.modelOverrides.get(threadTs);
+		const model = override
+			? `${override.provider}/${override.modelId}`
+			: this.cfg.model;
 		// The outbox path depends on the effective work dir (a /switch override) and
 		// the session key, so if the prompt is a builder, resolve it here — where
 		// both are known — to this spawn's concrete prompt. This keeps the prompt and
@@ -230,7 +319,7 @@ export class SessionManager {
 			{
 				bin: this.cfg.bin,
 				workDir,
-				model: this.cfg.model,
+				model,
 				appendSystemPrompt,
 				sessionDir: this.cfg.sessionDir,
 				sessionKey: threadTs,
@@ -281,6 +370,13 @@ export class SessionManager {
 		proc.on("stderr", (line: string) =>
 			console.error(`[claude:${threadTs}] ${line}`),
 		);
+		// A model switch that failed (e.g. a spawn-time set_model for a stale
+		// models.json entry) must not mislead the user — log it and notify the
+		// thread that the requested model did not take effect.
+		proc.on("model_error", (msg: string) => {
+			console.error(`[claude:${threadTs}] ${msg}`);
+			void handlers.onNotice?.(msg);
+		});
 		proc.on("exit", (code: number | null, signal: string | null) => {
 			console.error(
 				`[claude:${threadTs}] exited code=${code} signal=${signal}`,

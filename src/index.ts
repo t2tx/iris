@@ -420,13 +420,14 @@ async function tryCommand(
 ): Promise<boolean> {
 	const manager = managers.get(project.name);
 	if (!manager) return false;
-	const result = handleCommand(prompt, {
+	const result = await handleCommand(prompt, {
 		sessionKey,
 		manager,
 		allManagers: managers,
 		projectName: project.name,
 		baseWorkDir: project.workDir,
 		agentKind: project.agent,
+		model: project.model,
 	});
 	if (!result) return false;
 	// Log only the command name, never the full input — a command argument

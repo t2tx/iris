@@ -2,7 +2,12 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomInt } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createInterface } from "node:readline";
-import type { AgentOptions, AgentProcess, PermissionMode } from "../agent.js";
+import type {
+	AgentOptions,
+	AgentProcess,
+	AvailableModel,
+	PermissionMode,
+} from "../agent.js";
 import { type Attachment, buildPiPrompt } from "../attachments.js";
 import type { ParsedEvent, PermissionRequest } from "../protocol.js";
 import { parsePiLine } from "./pi-protocol.js";
@@ -25,16 +30,34 @@ import { parsePiLine } from "./pi-protocol.js";
 const CONFIRM_TOOL = "(confirm)";
 
 /**
+ * Split a configured model string "provider/id" into its provider and modelId
+ * parts. Pi's set_model RPC needs them separately; the legacy "model" field was
+ * never valid. Returns undefined when there is no provider part (bare id or
+ * empty), so the caller can skip the malformed request instead of sending it.
+ */
+function splitModelId(
+	model: string,
+): { provider: string; modelId: string } | undefined {
+	const idx = model.indexOf("/");
+	if (idx <= 0 || idx === model.length - 1) return undefined;
+	const provider = model.slice(0, idx);
+	const modelId = model.slice(idx + 1);
+	if (!provider || !modelId) return undefined;
+	return { provider, modelId };
+}
+
+/**
  * Events emitted (same surface as ClaudeProcess):
  *    "session"     (sessionId: string)
  *    "text"        (text: string)
  *    "thinking"    (text: string)
  *    "tool_use"    (toolName: string, input)
  *    "permission"  (req: PermissionRequest)
- *    "result"      (raw: Record<string,unknown>)
- *    "exit"        (code, signal)
- *    "error"       (err: Error)
- *    "stderr"      (line: string)
+ *     "result"              (raw: Record<string,unknown>)
+ *     "model_error"         (msg: string)   set_model / get_available_models failure (logged + notice)
+ *     "exit"                (code, signal)
+ *     "error"               (err: Error)
+ *     "stderr"              (line: string)
  */
 
 // Seed the per-process counter from a random boot offset so instanceIds do not
@@ -49,6 +72,23 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 	private readonly workDir: string;
 	/** Unique per spawned process; used to reject stale permission clicks. */
 	readonly instanceId = nextInstanceId++;
+
+	/** The model Pi is currently using for this session, last seen via get_state / set_model response. */
+	private trackedModel: AvailableModel | undefined;
+	/**
+	 * Single-shot resolvers awaiting a command response (e.g. listModels). Keyed by
+	 * the request id Iris assigns; exactly one is in flight at a time, so this is a
+	 * single-slot queue that still tolerates interleaved responses.
+	 */
+	private readonly pendingResponses = new Map<
+		string,
+		{
+			resolve: (v: AvailableModel[]) => void;
+			reject: (err: Error) => void;
+			timer: ReturnType<typeof setTimeout>;
+		}
+	>();
+	private nextRpcId = 0;
 
 	constructor(opts: AgentOptions, mode: PermissionMode) {
 		super();
@@ -86,6 +126,7 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 		});
 		this.proc.on("exit", (code, signal) => {
 			this.alive = false;
+			this.rejectPendingResponses(new Error(`pi exited (code=${code})`));
 			this.emit("exit", code, signal);
 		});
 
@@ -97,9 +138,23 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 			if (line.trim()) this.emit("stderr", line);
 		});
 
-		// Post-spawn setup: send model configuration.
-		if (opts.model) {
-			this.writeJSON({ type: "set_model", model: opts.model });
+		// Post-spawn setup: send the configured model (if any). Pi's set_model RPC
+		// requires provider + modelId separately — the legacy {model:"..."} shape
+		// from the Claude era was never valid and silently no-op'd, so Iris's
+		// configured model was ignored and pi ran its own default. Split on the
+		// first "/"; if it is not the "provider/id" shape we cannot send it, so
+		// skip with a warning rather than send a malformed request.
+		const split = opts.model ? splitModelId(opts.model) : undefined;
+		if (split) {
+			this.writeJSON({
+				type: "set_model",
+				provider: split.provider,
+				modelId: split.modelId,
+			});
+		} else {
+			console.error(
+				`[pi] set_model skipped: model "${opts.model}" is not in "provider/id" form`,
+			);
 		}
 
 		// Query the session id. Unlike Claude Code (which auto-emits a session id
@@ -119,6 +174,48 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 
 	getPid(): number | undefined {
 		return this.proc.pid;
+	}
+
+	/**
+	 * Switch the model of the live session without respawning, keeping the
+	 * conversation context. Pi applies it on the next LLM call. The success/failure
+	 * of the resulting set_model response is tracked in currentModel / surfaced on
+	 * the "model_error" event.
+	 */
+	setModel(provider: string, modelId: string): void {
+		this.writeJSON({ type: "set_model", provider, modelId });
+	}
+
+	/** The model Pi last reported for this session (from get_state / set_model), if known. */
+	currentModel(): AvailableModel | undefined {
+		return this.trackedModel;
+	}
+
+	/**
+	 * Ask Pi which models are available, via the get_available_models RPC. Single-slot:
+	 * a request id is assigned for correlation; a 5s timeout guards a missing reply,
+	 * and a process exit rejects the pending call. Backends that do not expose this
+	 * capability simply are not given this method.
+	 */
+	listModels(): Promise<AvailableModel[]> {
+		return new Promise<AvailableModel[]>((resolve, reject) => {
+			const id = String(++this.nextRpcId);
+			const timer = setTimeout(() => {
+				this.pendingResponses.delete(id);
+				reject(new Error("listModels timed out"));
+			}, 5_000);
+			this.pendingResponses.set(id, { resolve, reject, timer });
+			this.writeJSON({ type: "get_available_models", id });
+		});
+	}
+
+	/** Reject every pending RPC resolver (called on exit / close). */
+	private rejectPendingResponses(err: Error): void {
+		for (const { reject, timer } of this.pendingResponses.values()) {
+			clearTimeout(timer);
+			reject(err);
+		}
+		this.pendingResponses.clear();
 	}
 
 	/**
@@ -189,6 +286,7 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 				}
 			}
 		}
+		this.rejectPendingResponses(new Error("pi closed"));
 	}
 
 	private writeJSON(v: unknown): void {
@@ -279,6 +377,49 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 				this.sessionId = sid;
 				this.emit("session", sid);
 			}
+			// get_state also reports the model Pi is running; keep it as currentModel.
+			this.trackedModel = this.extractModel(data?.model);
+			return;
+		}
+
+		// get_available_models RPC (listModels): resolve the awaiting call by the
+		// id Iris assigned when it sent the request.
+		if (raw.command === "get_available_models") {
+			const rid = typeof raw.id === "string" ? raw.id : undefined;
+			const resolver = rid ? this.pendingResponses.get(rid) : undefined;
+			if (resolver && rid) {
+				clearTimeout(resolver.timer);
+				this.pendingResponses.delete(rid);
+				if (raw.success === true) {
+					const data = raw.data as { models?: unknown } | undefined;
+					const list = Array.isArray(data?.models) ? data.models : [];
+					resolver.resolve(
+						list
+							.map((m) => this.extractModel(m))
+							.filter((m): m is AvailableModel => m !== undefined),
+					);
+				} else {
+					resolver.reject(
+						new Error(
+							`get_available_models failed: ${String(raw.error ?? "")}`,
+						),
+					);
+				}
+				return;
+			}
+		}
+
+		// set_model RPC: Pi confirms the switch on success. Track the new model,
+		// and surface a failure to avoid a user being misled about a switch that
+		// never took effect.
+		if (raw.command === "set_model") {
+			if (raw.success === true) {
+				this.trackedModel = this.extractModel(raw.data);
+			} else {
+				const msg = `[pi] set_model failed: ${String(raw.error ?? "unknown error")}`;
+				console.error(msg);
+				this.emit("model_error", msg);
+			}
 			return;
 		}
 
@@ -291,6 +432,19 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 			this.sessionId = sid;
 			this.emit("session", sid);
 		}
+	}
+
+	/** Project one of Pi's Model records to the minimal AvailableModel Iris needs. */
+	private extractModel(raw: unknown): AvailableModel | undefined {
+		if (!raw || typeof raw !== "object") return undefined;
+		const m = raw as Record<string, unknown>;
+		const provider = typeof m.provider === "string" ? m.provider : undefined;
+		const id = typeof m.id === "string" ? m.id : undefined;
+		if (!provider || !id) return undefined;
+		const out: AvailableModel = { provider, id };
+		if (typeof m.name === "string") out.name = m.name;
+		if (typeof m.reasoning === "boolean") out.reasoning = m.reasoning;
+		return out;
 	}
 
 	/**

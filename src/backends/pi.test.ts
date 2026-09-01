@@ -799,3 +799,183 @@ test("PiProcess instanceIds are unique across instances", async () => {
 	mgr1.closeAll();
 	mgr2.closeAll();
 });
+
+// ── Runtime model switching (/model, set_model / get_available_models RPC) ───
+
+describe("PiProcess model switching", () => {
+	/**
+	 * Build a request/response fake pi. The body is prepended (e.g. a get_state
+	 * emit + flags); the loop then reads each request line and replies with the
+	 * SAME id (quoted, as pi's string ids), so correlation is in-order and race-
+	 * free — mirroring the hermes fake. JSON uses single-quoted format strings so
+	 * the inner double quotes need no escaping; %s carries the requested id.
+	 */
+	function ridEcho(body: string): string {
+		return `
+${body}
+while IFS= read -r line; do
+  rid=$(printf '%s' "$line" | grep -o '"id":"[0-9][0-9]*"' | head -n1 | sed 's/^"id":"//;s/"$//')
+  case "$line" in
+        *get_available_models*)
+          printf '{"type":"response","command":"get_available_models","success":true,"id":"%s","data":{"models":[{"provider":"anthropic","id":"sonnet","name":"Sonnet"},{"provider":"openai","id":"gpt","reasoning":true}]}}\\n' "$rid"
+              ;;
+        *set_model*)
+          if [ "$FAKE_PI_SETMODEL_FAIL" = "1" ]; then
+             printf '{"type":"response","command":"set_model","success":false,"error":"unknown model"}\\n'
+             else
+             printf '{"type":"response","command":"set_model","success":true,"data":{"provider":"x","id":"y"}}\\n'
+             fi
+              ;;
+  esac
+done`;
+	}
+
+	test("sends set_model as provider + modelId at spawn, not a bare model field", async () => {
+		const binDir = mkdtempSync(join(tmpdir(), "iris-setmodel-"));
+		const stdinPath = join(binDir, "stdin.log");
+		const resp = JSON.stringify({
+			type: "response",
+			command: "get_state",
+			success: true,
+			data: { sessionId: "sm-sess" },
+		});
+		const script = [`printf '%s\\n' '${resp}'`, `cat > "${stdinPath}"`].join(
+			"\n",
+		);
+		const bin = createFakePi(script);
+		const mgr = new SessionManager({
+			bin,
+			workDir: process.cwd(),
+			mode: "auto",
+			model: "deepseek-official/deepseek-v4-flash",
+			createProcess: (o, m) => new PiProcess(o, m),
+		});
+
+		mgr.send("t1", "hi", noopHandlers);
+		await waitFor(() => mgr.getSessionInfo("t1")?.sessionId === "sm-sess");
+		const landed = await waitFor(() => {
+			if (!existsSync(stdinPath)) return false;
+			return readFileSync(stdinPath, "utf8").includes('"type":"set_model"');
+		});
+		expect(landed).toBe(true);
+		const lines = readFileSync(stdinPath, "utf8").split("\n").filter(Boolean);
+		mgr.closeAll();
+		const setLine = lines.find((l) => l.includes("set_model"));
+		const parsed = JSON.parse(setLine ?? "{}");
+		expect(parsed.type).toBe("set_model");
+		expect(parsed.provider).toBe("deepseek-official");
+		expect(parsed.modelId).toBe("deepseek-v4-flash");
+		// The legacy bug: a bare "model" field was silently ignored by pi.
+		expect(parsed.model).toBeUndefined();
+	});
+
+	test("tracks the current model from the get_state response", async () => {
+		const binDir = mkdtempSync(join(tmpdir(), "iris-curmodel-"));
+		const stdinPath = join(binDir, "stdin.log");
+		const script = [
+			`printf '%s\\n' '${JSON.stringify({
+				type: "response",
+				command: "get_state",
+				success: true,
+				data: {
+					sessionId: "cur-model-sess",
+					model: {
+						provider: "anthropic",
+						id: "sonnet",
+						name: "Claude Sonnet",
+					},
+				},
+			})}'`,
+			`cat > "${stdinPath}"`,
+		].join("\n");
+		const bin = createFakePi(script);
+		let captured: AgentProcess | undefined;
+		const mgr = new SessionManager({
+			bin,
+			workDir: process.cwd(),
+			mode: "auto",
+			createProcess: (o, m) => {
+				const p = new PiProcess(o, m);
+				captured = p;
+				return p;
+			},
+		});
+
+		mgr.send("t1", "hi", noopHandlers);
+		await waitFor(
+			() => mgr.getSessionInfo("t1")?.sessionId === "cur-model-sess",
+		);
+		const cur = captured?.currentModel?.();
+		expect(cur?.provider).toBe("anthropic");
+		expect(cur?.id).toBe("sonnet");
+		mgr.closeAll();
+	});
+
+	test("listModels resolves models from a get_available_models response", async () => {
+		const bin = createFakePi(
+			ridEcho(
+				`printf '%s\\n' '${JSON.stringify({
+					type: "response",
+					command: "get_state",
+					success: true,
+					data: { sessionId: "list-sess" },
+				})}'`,
+			),
+		);
+		let captured: AgentProcess | undefined;
+		const mgr = new SessionManager({
+			bin,
+			workDir: process.cwd(),
+			mode: "auto",
+			createProcess: (o, m) => {
+				const p = new PiProcess(o, m);
+				captured = p;
+				return p;
+			},
+		});
+
+		mgr.send("t1", "hi", noopHandlers);
+		await waitFor(() => mgr.getSessionInfo("t1")?.sessionId === "list-sess");
+		const models = (await captured?.listModels?.()) ?? [];
+		const ids = models.map((m) => `${m.provider}/${m.id}`);
+		expect(ids).toContain("anthropic/sonnet");
+		expect(ids).toContain("openai/gpt");
+		expect(models.find((m) => m.id === "gpt")?.reasoning).toBe(true);
+		mgr.closeAll();
+	});
+
+	test("a set_model failure surfaces as a model_error event", async () => {
+		// A fake that lands the session (get_state) then always fails set_model,
+		// so the spawn-time set_model emits a failure → a "model_error" notice.
+		const bin = createFakePi(
+			ridEcho(
+				`FAKE_PI_SETMODEL_FAIL=1
+printf '%s\\n' '${JSON.stringify({
+					type: "response",
+					command: "get_state",
+					success: true,
+					data: { sessionId: "fail-sess" },
+				})}'`,
+			),
+		);
+		const noticed: string[] = [];
+		const mgr = new SessionManager({
+			bin,
+			workDir: process.cwd(),
+			mode: "auto",
+			model: "bogus/prov-model",
+			createProcess: (o, m) => new PiProcess(o, m),
+		});
+
+		mgr.send("t1", "hi", {
+			...noopHandlers,
+			onNotice: (t) => {
+				noticed.push(t);
+			},
+		});
+		await waitFor(() => mgr.getSessionInfo("t1")?.sessionId === "fail-sess");
+		await waitFor(() => noticed.some((s) => s.includes("set_model failed")));
+		expect(noticed[0]).toContain("set_model failed");
+		mgr.closeAll();
+	});
+});
