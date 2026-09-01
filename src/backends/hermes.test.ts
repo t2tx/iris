@@ -106,10 +106,17 @@ function newProc(
 	return proc;
 }
 
+/**
+ * Wait for a HermesProcess event. The default budget is generous (15s): these
+ * tests spawn a REAL `sh` subprocess and a full ACP handshake, so under heavy
+ * CI-runner load (fork-parallel + slow runner) a 3s budget occasionally
+ * starves the first post-spawn event. A true deadlock is far longer, so a
+ * comfortable headroom both absorbs jitter and still fails fast on a hang.
+ */
 function waitFor(
 	proc: HermesProcess,
 	ev: string,
-	ms = 3000,
+	ms = 15_000,
 ): Promise<unknown[]> {
 	return new Promise((resolve, reject) => {
 		const t = setTimeout(
