@@ -6,73 +6,83 @@ import type { AgentOptions, PermissionMode } from "../agent.js";
 import { HermesProcess } from "./hermes.js";
 
 /**
- * hermes.ts — fake `hermes` binary strategy (mirrors pi.test.ts): the fake emits
- * canned JSON-RPC lines so we exercise the backend without a real MLX turn.
+ * hermes.ts — fake `hermes acp` binary strategy (mirrors pi.test.ts): the fake
+ * is a PURE SHELL script that emits canned JSON-RPC lines, so we exercise the
+ * backend with NO node subprocess. An earlier version did `exec node <body>` to
+ * generate the JSON, which introduced runner-dependent cold-start latency and
+ * made CI flaky (a 3000ms test budget the slow runner sometimes missed). Emits
+ * are piped through `cat` so a block-buffered pipe stdout is flushed per line
+ * (dash/bash otherwise full-buffer a pipe).
  */
 
-// ── Fake hermes binary ───────────────────────────────────────────────────
+// ── Fake hermes binary (pure shell, no node) ───────────────────────────────
 
-const FAKE_HERMES_NODE = `
-const fs = require('fs');
-function send(o) { process.stdout.write(JSON.stringify(o) + '\\n'); }
-const args = process.argv.slice(2);
-if (args.includes('--check')) {
-  if (process.env.FAKE_HERMES_FAILCHECK) {
-     process.stderr.write("Traceback (most recent call last):\\nModuleNotFoundError: No module named 'acp'\\n");
-     process.exit(1);
-  }
-  process.stdout.write('OK\\n');
-  process.exit(0);
-}
-if (process.env.FAKE_HERMES_ENV_OUT) {
-  try { fs.writeFileSync(process.env.FAKE_HERMES_ENV_OUT, JSON.stringify({ HERMES_HOME: process.env.HERMES_HOME })); } catch (e) {}
-   }
-const SID = process.env.FAKE_HERMES_SID || 'sess-fake-123';
-send({ jsonrpc: '2.0', id: 1, result: { agentCapabilities: {}, agentInfo: { name: 'hermes', version: '0.x' }, protocolVersion: 1 } });
-send({ jsonrpc: '2.0', id: 2, result: { sessionId: SID, models: [], modes: { availableModes: ['default'], currentModeId: 'default' } } });
-let done = false;
-process.stdin.on('data', (d) => {
- for (const line of d.toString().split('\\n')) {
-  if (!line.trim()) continue;
-  let o; try { o = JSON.parse(line); } catch (e) { continue; }
-  if (o.method === 'session/prompt') {
-   if (process.env.FAKE_HERMES_PERM) {
-     send({ jsonrpc: '2.0', id: 'perm-1', method: 'session/request_permission',
-       params: { session_id: SID,
-         tool_call: { title: 'Bash: ls', kind: 'execute', raw_input: { command: 'ls' } },
-         options: [
-            { option_id: 'allow_once', kind: 'allow_once', name: 'Allow once' },
-            { option_id: 'deny', kind: 'reject_once', name: 'Deny' } ] } });
-     if (process.env.FAKE_HERMES_AUTO) {
-       send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: SID, update: { content: { text: 'ok', type: 'text' }, sessionUpdate: 'agent_message_chunk' } } });
-       send({ jsonrpc: '2.0', id: o.id, result: { stopReason: 'end_turn', usage: { inputTokens: 5, outputTokens: 2, cachedReadTokens: 0, thoughtTokens: 0, totalTokens: 7 } } });
-      }
-     continue;
-  }
-   send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: SID, update: { content: { text: 'hello', type: 'text' }, sessionUpdate: 'agent_message_chunk' } } });
-   send({ jsonrpc: '2.0', id: o.id, result: { stopReason: 'end_turn', usage: { inputTokens: 5, outputTokens: 2, cachedReadTokens: 0, thoughtTokens: 0, totalTokens: 7 } } });
-   done = true;
-  }
- }
-});
-process.stdin.resume();
-setTimeout(() => { if (done) process.exit(0); }, 500);
+// The body is deliberately free of `${...}` and backticks so it can live
+// inside a JS template literal verbatim; variables are interpolated via %s.
+const FAKE_HERMES_BODY = `
+emit() { printf '%s\\n' "$1" | cat; }
+
+# 83 health gate: hermes acp --check (classify via exit code / stderr)
+for a in "$@"; do
+  if [ "$a" = "--check" ]; then
+    if [ -n "$FAKE_HERMES_FAILCHECK" ]; then
+      printf 'Traceback (most recent call last):\\nModuleNotFoundError: No module named acp\\n' >&2
+      exit 1
+    fi
+    printf 'OK\\n'
+    exit 0
+  fi
+done
+
+# 81/82 record the injected HERMES_HOME for the per-session storage test
+if [ -n "$FAKE_HERMES_ENV_OUT" ]; then
+  printf '{"HERMES_HOME":"%s"}' "$HERMES_HOME" > "$FAKE_HERMES_ENV_OUT" 2>/dev/null || true
+fi
+
+SID=$FAKE_HERMES_SID
+[ -n "$SID" ] || SID=sess-fake-123
+
+# startup: initialize + new_session responses (correlated by JSON-RPC id)
+emit '{"jsonrpc":"2.0","id":1,"result":{"agentCapabilities":{},"agentInfo":{"name":"hermes","version":"0.x"},"protocolVersion":1}}'
+emit "$(printf '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"%s","models":[],"modes":{"availableModes":["default"],"currentModeId":"default"}}}' "$SID")"
+
+# respond to a session/prompt on stdin (text + result, or the permission flow)
+while IFS= read -r line; do
+  case "$line" in
+     *session/prompt*)
+      if [ -n "$FAKE_HERMES_PERM" ]; then
+        emit "$(printf '{"jsonrpc":"2.0","id":"perm-1","method":"session/request_permission","params":{"session_id":"%s","tool_call":{"title":"Bash: ls","kind":"execute","raw_input":{"command":"ls"}},"options":[{"option_id":"allow_once","kind":"allow_once","name":"Allow once"},{"option_id":"deny","kind":"reject_once","name":"Deny"}]}}' "$SID")"
+        if [ -n "$FAKE_HERMES_AUTO" ]; then
+          emit "$(printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":{"content":{"text":"ok","type":"text"},"sessionUpdate":"agent_message_chunk"}}}' "$SID")"
+          emit '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn","usage":{"inputTokens":5,"outputTokens":2,"cachedReadTokens":0,"thoughtTokens":0,"totalTokens":7}}}'
+        fi
+      else
+        emit "$(printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":{"content":{"text":"hello","type":"text"},"sessionUpdate":"agent_message_chunk"}}}' "$SID")"
+        emit '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn","usage":{"inputTokens":5,"outputTokens":2,"cachedReadTokens":0,"thoughtTokens":0,"totalTokens":7}}}'
+      fi
+     ;;
+   esac
+done
 `;
+
+function escapeShell(v: string | undefined): string {
+	// POSIX single-quote-escape: wrap in '...' and replace an embedded ' with '\''.
+	return (v ?? "").replace(/'/g, "'\\''");
+}
 
 function createFakeHermes(env: Record<string, string> = {}): string {
 	const dir = mkdtempSync(join(tmpdir(), "iris-fakehermes-"));
-	const body = join(dir, "hermes-body.js");
-	writeFileSync(body, FAKE_HERMES_NODE);
 	const entry = join(dir, "hermes.sh");
+	const envLines = [
+		`FAKE_HERMES_FAILCHECK='${escapeShell(env.FAKE_HERMES_FAILCHECK)}'`,
+		`FAKE_HERMES_PERM='${escapeShell(env.FAKE_HERMES_PERM)}'`,
+		`FAKE_HERMES_AUTO='${escapeShell(env.FAKE_HERMES_AUTO)}'`,
+		`FAKE_HERMES_SID='${escapeShell(env.FAKE_HERMES_SID)}'`,
+		`FAKE_HERMES_ENV_OUT='${escapeShell(env.FAKE_HERMES_ENV_OUT)}'`,
+	];
 	writeFileSync(
 		entry,
-		`#!/bin/sh\n` +
-			`FAKE_HERMES_FAILCHECK=${env.FAKE_HERMES_FAILCHECK || ""} \\\n` +
-			`FAKE_HERMES_PERM=${env.FAKE_HERMES_PERM || ""} \\\n` +
-			`FAKE_HERMES_AUTO=${env.FAKE_HERMES_AUTO || ""} \\\n` +
-			`FAKE_HERMES_SID=${env.FAKE_HERMES_SID || ""} \\\n` +
-			`FAKE_HERMES_ENV_OUT=${env.FAKE_HERMES_ENV_OUT || ""} \\\n` +
-			`exec node ${body} "$@"\n`,
+		`#!/bin/sh\n` + envLines.join("\n") + `\n\n` + FAKE_HERMES_BODY + "\n",
 		{ mode: 0o755 },
 	);
 	return entry;
