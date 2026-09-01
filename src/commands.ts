@@ -96,16 +96,11 @@ export function handleCommand(
 				text: `_Usage: \`${CC_PREFIX}<command> [args]\` — runs Claude Code's \`/<command>\` (custom commands / skills only)._`,
 			};
 		}
-		// /cc: forwards to the underlying CLI's own slash namespace, which only
-		// Claude Code has a headless path for. pi/hermes get the text verbatim as a
-		// normal prompt instead of a meaningless forward.
+		// Non-Claude backends have no /cc: slash namespace. Strip the prefix and
+		// forward the remainder as a normal prompt, so the user's request is not
+		// dropped (Claude keeps the /<command> namespace via forwardToClaude).
 		if (ctx.agentKind !== "claude") {
-			return {
-				text:
-					`_\`/cc:\` forwards to Claude Code's \`/<command>\`; this thread runs the ` +
-					`\`${ctx.agentKind}\` backend, which has no such namespace. ` +
-					"_Type your request normally and it is sent as a prompt._",
-			};
+			return { forwardToClaude: rest, text: "" };
 		}
 		return { forwardToClaude: `/${rest}`, text: "" };
 	}
