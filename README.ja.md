@@ -2,7 +2,7 @@
 
 Slack ⇄ AIエージェント・ブリッジ — 最小構成・自己ホスト型。
 
-<p align="right"><a href="./README.en.md">English</a></p>
+<p align="right"><a href="./README.md">English</a></p>
 
 Iris は Slack ワークスペースと、ローカルで動く **エージェント CLI**（[Claude Code](https://claude.com/claude-code) ・ [**Pi**](https://github.com/earendil-works/pi) ・ **Hermes**）をつなぎます。Slack のスレッドからエージェントに話しかけると、Iris がそのエージェントを常駐プロセスとして起動し、出力をストリームで返し、ツール実行の許可をクリック可能なボタンとして提示します。
 

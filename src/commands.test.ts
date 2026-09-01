@@ -91,21 +91,21 @@ describe("handleCommand", () => {
 		expect(result?.text.includes("/cc:")).toBeTruthy();
 	});
 
-	it("/cc:<command> is a no-op forward on the pi backend (text as prompt, not a forward)", () => {
+	it("/cc:<command> forwards the stripped remainder as a prompt on the pi backend", () => {
 		const result = handleCommand("/cc:mycommand", makeCtx({ agentKind: "pi" }));
 		expect(result).toBeTruthy();
-		expect(result?.forwardToClaude).toBe(undefined); // not forwarded
-		expect(result?.text).toContain("pi");
+		expect(result?.forwardToClaude).toBe("mycommand");
+		expect(result?.text).toBe("");
 	});
 
-	it("/cc:<command> is a no-op forward on the hermes backend", () => {
+	it("/cc:<command> forwards the stripped remainder as a prompt on the hermes backend", () => {
 		const result = handleCommand(
 			"/cc:mycommand",
 			makeCtx({ agentKind: "hermes" }),
 		);
 		expect(result).toBeTruthy();
-		expect(result?.forwardToClaude).toBe(undefined);
-		expect(result?.text).toContain("hermes");
+		expect(result?.forwardToClaude).toBe("mycommand");
+		expect(result?.text).toBe("");
 	});
 
 	it("/cc:<command> still forwards on the claude backend", () => {

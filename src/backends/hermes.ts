@@ -450,8 +450,11 @@ export class HermesProcess extends EventEmitter implements AgentProcess {
 			raw["id"] !== undefined ? String(raw["id"]) : `perm-${Date.now()}`;
 		const toolCall = params["tool_call"] as Record<string, unknown> | undefined;
 		const options = Array.isArray(params["options"]) ? params["options"] : [];
+		// Guard against non-object / null option entries so a malformed
+		// request_permission never throws on `o.option_id`.
 		const offered = options
-			.map((o) => (o as { option_id?: string }).option_id)
+			.filter((o): o is Record<string, unknown> => !!o && typeof o === "object")
+			.map((o) => o.option_id)
 			.filter((id): id is string => typeof id === "string" && !!id);
 		const isEdit = toolCall?.kind === "edit";
 
