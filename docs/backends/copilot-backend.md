@@ -225,10 +225,37 @@ copilot は **token 件数ではなく、`premiumRequests`/`totalApiDurationMs`/
 2. **`copilot-protocol.ts` パーサー**（`session/update` → `ParsedEvent[]`、`tool_call`/`end_turn`/`usage` 対応）＋単体テスト。
 3. **`CopilotProcess`**（`copilot --resume? --acp --log-level error` spawn + `initialize`→`session/new`→`session/prompt`
    + 完了検出 + `kill()/on()` 実装、`agent.ts` `AgentProcess` 準拠、孫プロセス kill 対策）。
-4. **`PermissionMode`→起動フラグ変換**（`auto`→`--allow-all`、`acceptEdits`→`--allow-tool write(*)` 等）。
+4. **`PermissionMode`→起動フラグ変換**（`auto`→`--allow-all`、`acceptEdits`→`--allow-tool 'write'` 等）。
 5. **`UsageInfo` 拡張＋`/stats` `/usage` daily digest の backend 別整形**。
 6. **`copilot-sessions.ts`（`/resume` via `session/list`）** ＋ `/resume` 配線。
 7. **`session/set_mode`/`set_model`/`close`** の実測＋`/mode` `/model` `/stop` 配線（R4）。
 8. **smoke test（`copilot --version`）＋ README/AGENTS 更新**（`pi` と同レベルの扱いにする）。
 
 > SPEC と WBS（各 issue の粒度・acceptance）は別途起草。このノートは可行性＋プロトコル事実の根拠として残す。
+
+---
+
+## 運用上の制限（v1 確定事項・2026-09-04 実測）
+
+1. **権限はプロセス起動時のみ有効**。Copilot の ACP モード（v1.0.82）では
+   server→client の対話的権限リクエスト（`session/request_permission`）が発火しない
+   （実測キャプチャで確認）。したがって iris の per-tool 許可/拒否ボタンは copilot には
+   **出ない**。代わりに起動時のフラグで gating を確定する（`CopilotProcess`）:
+   - `auto`        → `--allow-all`（全ツール許可、a.k.a. `--yolo`）
+   - `acceptEdits` → `--allow-tool 'write'`（ファイル編集のみ、copilot --help の実例）
+   - `manual`      → 追加フラグなし（copilot の宣言的ポリシー既定）
+
+   `manual` での運用では対話的承認が Slack からできないためツールが実行されない
+   可能性が高い。対話承認は将来 `session/set_mode` で per-turn 対応（本 epic 外）。
+
+2. **`/resume` の挙動は backend 間で一貫**。copilot は `--resume <sid>` ＋ `session/new`
+   で同一 sid を返し履歴を引き継ぐ（copilot-protocol / copile.ts）。no-arg `/resume`
+   （過去 session の一覧）は claude 専用（`~/.claude/projects` スキャン）のままで
+   pi の挙動に合わせる。copilot で session 一覧を欲する場合は ACP の `session/list`
+   を使用する（`copilot-sessions.ts` の純パーサを提供、`session/list` 実行は smoke/
+   integration 層に委譲）。v1 では no-arg 一覧は非対応（pi/hermes と同型）。
+
+3. **WBS の分割は 9 タスク → 3 issue に集約**（各 issue ＝ 約 1 人日単位）:
+   - #98: スケルトン（ACP 相関＋パーサ＋config＋配線）
+   - #99: 権限フラグマッピング＋`/resume`
+   - #100: usage/stats 表示＋孫プロセス clean-up＋smoke/docs/secret-scan

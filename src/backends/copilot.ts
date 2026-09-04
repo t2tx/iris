@@ -38,6 +38,35 @@ import { parseCopilotLine } from "./copilot-protocol.js";
 // repeat across Iris restarts (same strategy as ClaudeProcess / HermesProcess).
 let nextInstanceId = randomInt(1, 1_000_000_000);
 
+/**
+ * Map Iris's permission mode to Copilot's launch-time tool-gating flags.
+ *
+ * Copilot's ACP mode (verified against v1.0.82) is *non-interactive*: it does
+ * NOT surface a per-call `session/request_permission` to the client, so tool
+ * gating is fixed ONCE when the process starts rather than per action. The flags
+ * are the verified copile CLI switches (from `copile --help`):
+ *   auto        → `--allow-all`              (a.k.a. `--yolo`; grant every tool)
+ *   acceptEdits → `--allow-tool 'write'`     (allow file editing only)
+ *   manual      → (no flag)                  (Copile's declared-policy default)
+ *
+ * It is a pure function so the mapping is unit-tested without spawning a process
+ * (issue #99 acceptance). `manual` grants nothing extra — Copile's default is to
+ * declare its own policy; the v1 limitation is that a `manual` turn cannot be
+ * approved interactively from Slack, so tools may not run. (Follow-up: drive
+ * `session/set_mode` for per-turn approval, out of this epic.)
+ */
+export function copilotPermissionFlags(mode: PermissionMode): string[] {
+	switch (mode) {
+		case "auto":
+			return ["--allow-all"];
+		case "acceptEdits":
+			return ["--allow-tool", "write"];
+		case "manual":
+		default:
+			return [];
+	}
+}
+
 export class CopilotProcess extends EventEmitter implements AgentProcess {
 	private proc?: ChildProcessWithoutNullStreams;
 	private alive = false;
@@ -109,11 +138,17 @@ export class CopilotProcess extends EventEmitter implements AgentProcess {
 
 	/**
 	 * Build the CLI args. `--acp` + `--log-level error` are the minimum to open
-	 * the ACP server. The v1 skeleton omits launch-time permission flags
-	 * (issue #99 adds `--allow-all` / `--allow-tool write(*)`).
+	 * the ACP server. Tool gating is decided ONCE at process start via
+	 * `copilotPermissionFlags(mode)` — Copilot's ACP is non-interactive, so there
+	 * is no per-call approval round-trip (issue #99 / risk R2).
 	 */
 	private buildArgs(opts: AgentOptions): string[] {
-		const args = ["--acp", "--log-level", "error"];
+		const args = [
+			"--acp",
+			"--log-level",
+			"error",
+			...copilotPermissionFlags(this.mode),
+		];
 		if (opts.resume) args.push("--resume", opts.resume);
 		if (opts.model) args.push("--model", opts.model);
 		return args;
