@@ -10,6 +10,7 @@ import type { AgentOptions, AgentProcess, PermissionMode } from "./agent.js";
 import type { Attachment } from "./attachments.js";
 import { ensureOutboxDir, outboxDir } from "./attachments.js";
 import { ClaudeProcess } from "./backends/claude.js";
+import { CopilotProcess } from "./backends/copilot.js";
 import { HermesProcess } from "./backends/hermes.js";
 import { PiProcess } from "./backends/pi.js";
 import { handleCommand } from "./commands.js";
@@ -143,7 +144,9 @@ for (const p of config.projects) {
 			? config.piBin
 			: p.agent === "hermes"
 				? config.hermesBin
-				: config.claudeBin;
+				: p.agent === "copilot"
+					? config.copilotBin
+					: config.claudeBin;
 	const createProcess: (
 		opts: AgentOptions,
 		mode: PermissionMode,
@@ -152,7 +155,9 @@ for (const p of config.projects) {
 			? (opts, mode) => new PiProcess(opts, mode)
 			: p.agent === "hermes"
 				? (opts, mode) => new HermesProcess(opts, mode)
-				: (opts, mode) => new ClaudeProcess(opts, mode);
+				: p.agent === "copilot"
+					? (opts, mode) => new CopilotProcess(opts, mode)
+					: (opts, mode) => new ClaudeProcess(opts, mode);
 	// The outbox is scoped per Slack session (<workDir>/.iris/outbox/<session>),
 	// so two sessions on the same work_dir cannot drain each other's files. The
 	// project base is pre-created so the agent's first per-session write has a path

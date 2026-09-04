@@ -102,12 +102,13 @@ const PERMISSION_MODES: readonly PermissionMode[] = [
 
 /**
  * Which agent backend a session runs. `claude` is the default (backward
- * compatible); `pi` selects the Pi coding-agent backend. A top-level `agent`
- * sets the default and each `[[projects]]` may override it.
+ * compatible); `pi` / `hermes` / `copilot` select their respective ACP / RPC
+ * backends. A top-level `agent` sets the default and each `[[projects]]` may
+ * override it.
  */
-export type AgentKind = "claude" | "pi" | "hermes";
+export type AgentKind = "claude" | "pi" | "hermes" | "copilot";
 
-const AGENT_KINDS: readonly AgentKind[] = ["claude", "pi", "hermes"];
+const AGENT_KINDS: readonly AgentKind[] = ["claude", "pi", "hermes", "copilot"];
 
 export interface ProjectConfig {
 	name: string;
@@ -128,6 +129,8 @@ export interface IrisConfig {
 	piBin: string;
 	/** Path to the Hermes CLI (used when a project selects agent = "hermes"). */
 	hermesBin: string;
+	/** Path to the Copilot CLI (used when a project selects agent = "copilot"). */
+	copilotBin: string;
 	logLevel: LogLevel;
 	/** Max chars of a Bash command shown in the tool-progress line. */
 	bashProgressMax: number;
@@ -155,6 +158,7 @@ interface RawConfig {
 	claude_bin?: unknown;
 	pi_bin?: unknown;
 	hermes_bin?: unknown;
+	copilot_bin?: unknown;
 	agent?: unknown;
 	model?: unknown;
 	permission_mode?: unknown;
@@ -179,6 +183,7 @@ export function loadConfig(opts?: {
 	const claudeBin = str(raw.claude_bin) || "claude";
 	const piBin = str(raw.pi_bin) || "pi";
 	const hermesBin = str(raw.hermes_bin) || "hermes";
+	const copilotBin = str(raw.copilot_bin) || "copilot";
 	const defaultMode = parseMode(str(raw.permission_mode) || "manual");
 	const defaultAgent = parseAgent(str(raw.agent) || "claude");
 	const defaultModel = str(raw.model) || undefined;
@@ -192,6 +197,7 @@ export function loadConfig(opts?: {
 		claudeBin,
 		piBin,
 		hermesBin,
+		copilotBin,
 		logLevel,
 		bashProgressMax,
 		idleTtlMs,
