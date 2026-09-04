@@ -10,8 +10,8 @@ Iris connects a Slack workspace to a local [**agent CLI**](https://github.com/ea
 resident process, streams its output back, and turns tool-permission requests
 into clickable Slack buttons.
 
-It is a deliberately small tool — **Slack + a selectable agent backend** (Claude Code, Pi, or
-Hermes) — with no plugin registry, no multi-platform abstraction, no provider
+It is a deliberately small tool — **Slack + a selectable agent backend** (Claude Code,
+Pi, Hermes, or Copilot) — with no plugin registry, no multi-platform abstraction, no provider
 switching, cron, relay, or TTS.
 
 > Named after Iris, the Greek messenger goddess of the rainbow who relays
@@ -153,8 +153,17 @@ allow_users = ["U09XXXXXXX"]       # respond to this user's DMs
 
 By default Iris drives [Claude Code](https://claude.com/claude-code) (`claude`
 CLI). It can also drive the [**Pi** coding agent](https://github.com/earendil-works/pi)
-(`agent = "pi"`) or [**Hermes**](https://github.com/hermes-agent/hermes)
-(`agent = "hermes"`), selected per project (or as the top-level default).
+(`agent = "pi"`), [**Hermes**](https://github.com/hermes-agent/hermes) (`agent = "hermes"`),
+or [**Copilot CLI**](https://github.com/features/copilot) over the Agent Client
+Protocol (`agent = "copilot"`), selected per project (or as the top-level default).
+
+> The Copilot backend drives the `copilot` CLI in its ACP mode (`copilot --acp`) — the same
+> protocol Iris uses for Hermes. You must have the Copilot CLI installed and signed in on the
+> host (Copilot uses its own local auth); Iris never handles a Copilot credential or API key.
+> Copilot's ACP mode is autonomy-first: there is no per-action approval from Slack, so the tool
+> policy is set once at process start by the project's `permission_mode` (`auto` →
+> `--allow-all`, `acceptEdits` → `--allow-tool 'write'`, `manual` → Copilot's declared-policy
+default).
 
 Select the backend with the top-level `agent` key (default `claude`, override per
 project). The default Claude backend needs no change — `agent` unset means
@@ -167,7 +176,11 @@ agent = "pi"
 
 # Or drive Hermes via the Agent Client Protocol (ACP) instead:
 # agent = "hermes"
-# hermes_bin = "hermes"     # PATH to the Hermes CLI (default "hermes"; override if not on PATH)
+# hermes_bin = "hermes"       # PATH to the Hermes CLI (default "hermes"; override if not on PATH)
+
+# Or drive Copilot CLI over ACP (copilot must be installed and signed in locally):
+# agent = "copilot"
+# copilot_bin = "copilot"     # PATH to the Copilot CLI (default "copilot"; override if not on PATH)
 
 [[projects]]
 name = "pi-lab"
