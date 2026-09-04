@@ -1,11 +1,50 @@
 import { expect, test } from "vitest";
-
+import { parseCopilotLine } from "./backends/copilot-protocol.js";
 import {
 	applyNoReply,
 	toolProgressLine,
 	toSlackMrkdwn,
 	usageFooter,
 } from "./format.js";
+
+test("copilot usage payload flows through usageFooter (no backend-specific branch)", () => {
+	// A real copilot `session/prompt` result line (copilot v1.0.82 shape, which
+	// carries cachedReadTokens/cachedWriteTokens but no costUSD/durationMs).
+	const line = JSON.stringify({
+		jsonrpc: "2.0",
+		id: 3,
+		result: {
+			stopReason: "end_turn",
+			usage: {
+				inputTokens: 4200,
+				outputTokens: 17,
+				totalTokens: 4217,
+				thoughtTokens: 0,
+				cachedReadTokens: 3000,
+				cachedWriteTokens: 1200,
+			},
+		},
+	});
+	const events = parseCopilotLine(line).filter((e) => e.kind === "result");
+	expect(events).toHaveLength(1);
+	const result = events[0] as
+		| { kind: "result"; usage?: import("./protocol.js").UsageInfo }
+		| undefined;
+	expect(result).toBeDefined();
+	expect(result?.usage).toBeDefined();
+	const usage = result!.usage!;
+	expect(usage.inputTokens).toBe(4200);
+	expect(usage.outputTokens).toBe(17);
+	expect(usage.cacheReadTokens).toBe(3000);
+	// copilot does not report cost; the footer must still render token counts.
+	const footer = usageFooter(usage);
+	expect(footer).toContain("in:4.2k");
+	expect(footer).toContain("out:17");
+	expect(footer).toContain("cache:3.0k");
+	expect(footer).not.toContain("$"); // no cost for copilot
+	expect(footer.startsWith("_")).toBeTruthy();
+	expect(footer.endsWith("_")).toBeTruthy();
+});
 
 test("applyNoReply: whole reply is the marker → null", () => {
 	expect(applyNoReply("NO_REPLY")).toBe(null);
