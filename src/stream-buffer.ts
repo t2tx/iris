@@ -24,6 +24,12 @@ export class StreamBuffer {
 	private messageTs: string | null = null;
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private flushing = false;
+	// A terminal flush() (typing indicator off, full text) requested while a
+	// streaming push is in flight is remembered here so it is re-run once the
+	// in-flight push drains. Without this the `if (this.flushing) return` guard
+	// below silently dropped the final update, leaving the bubble at a stale
+	// partial frame with the typing indicator stuck.
+	private pendingFinal = false;
 
 	constructor(poster: SlackPoster, format: (raw: string) => string) {
 		this.poster = poster;
@@ -36,11 +42,16 @@ export class StreamBuffer {
 		this.scheduleUpdate();
 	}
 
-	/** Flush all buffered text to Slack immediately. Call before tool_use / permission / result. */
+	/**
+	 * Flush all buffered text to Slack immediately. Call before tool_use /
+	 * permission / result. Non-blocking when a streaming push is already in
+	 * flight: the terminal update is re-queued (see pendingFinal) and lands as
+	 * soon as the in-flight push drains.
+	 */
 	async flush(): Promise<void> {
 		this.clearTimer();
 		if (!this.buf) return;
-		await this.pushToSlack(false);
+		void this.pushToSlack(false);
 	}
 
 	/** Get the full accumulated text (before formatting). */
@@ -69,7 +80,13 @@ export class StreamBuffer {
 	}
 
 	private async pushToSlack(showTyping: boolean): Promise<void> {
-		if (this.flushing) return;
+		// A push is already in flight. For a terminal flush (typing off) remember
+		// it so the post-update re-run lands the full text without the typing
+		// indicator; a streaming tick is a no-op (another tick is already pending).
+		if (this.flushing) {
+			if (!showTyping) this.pendingFinal = true;
+			return;
+		}
 		this.flushing = true;
 		try {
 			const text = this.format(this.buf);
@@ -90,6 +107,12 @@ export class StreamBuffer {
 			);
 		} finally {
 			this.flushing = false;
+			// A terminal flush was requested mid-flight; run it now so the final
+			// full-text update (typing indicator off) actually lands.
+			if (this.pendingFinal) {
+				this.pendingFinal = false;
+				void this.pushToSlack(false);
+			}
 		}
 	}
 }

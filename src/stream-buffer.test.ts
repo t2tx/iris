@@ -117,4 +117,48 @@ describe("StreamBuffer", () => {
 		// A second flush is also safe.
 		await expect(buf.flush()).resolves.toBeUndefined();
 	});
+
+	// Regression: a streaming update (timer-fired `pushToSlack(true)`) that is still
+	// in flight when the turn ends must NOT swallow the terminal full-text flush. The
+	// old `if (this.flushing) return;` guard silently dropped the final `flush()`
+	// update, leaving the bubble at a stale partial frame with the ✍️ typing
+	// indicator stuck (Slack: ":writing_hand:") — the symptom seen when Copilot
+	// streamed a short answer followed by rapid messages. The terminal flush must
+	// always land the FULL accumulated text without the typing indicator.
+	it("terminal flush lands full text even when a streaming update is in-flight", async () => {
+		let release: () => void = () => {};
+		const gate = new Promise<void>((r) => (release = r));
+		const { poster, calls } = makePoster();
+		// Gate the second update so it stays parked mid-stream like a slow Slack
+		// `chat.update` call; the first POST (messageTs allocation) stays instant.
+		const gatedPoster: SlackPoster = {
+			post: (t) => poster.post(t),
+			update: async (ts: string, text: string) => {
+				calls.push({ method: "update", args: [ts, text] });
+				await gate; // park the in-flight streaming update
+			},
+		};
+		const buf = new StreamBuffer(gatedPoster, identity);
+		const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+		// 1st timer tick → POST "Hello ✍️" (first message, no update yet).
+		buf.append("Hello");
+		await wait(600);
+		// 2nd timer tick → update("…", "Hello world ✍️") — gated, in flight.
+		buf.append(" world");
+		await wait(600);
+		// While the streaming update is parked, the turn ends: more text + flush().
+		// flush() is non-blocking: it registers the terminal update as pendingFinal.
+		buf.append(" again");
+		void buf.flush(); // schedules the full-text terminal update (re-queued)
+		// Release the parked update; its finally re-runs the pending terminal flush
+		// with the FULL text and the typing indicator off.
+		release();
+		await gate;
+		await wait(50); // let the re-fired terminal update land
+
+		const updates = calls.filter((c) => c.method === "update");
+		const last = updates[updates.length - 1]!;
+		expect(last.args[1]).toBe("Hello world again");
+	});
 });
