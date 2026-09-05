@@ -44,6 +44,7 @@ import {
 	type InboundMessage,
 	type SlackFile,
 } from "./slack/messages.js";
+import { SlackThrottle } from "./slack/throttle.js";
 import { type SlackPoster, StreamBuffer } from "./stream-buffer.js";
 
 /**
@@ -195,6 +196,9 @@ const permissions = new PermissionRegistry();
 // is never sent to Claude twice. Keyed by Slack's own message/event id.
 const seenEvents = new SeenSet();
 
+// Throttle outbound Slack API calls to avoid rate-limit UI suppression.
+const slackThrottle = new SlackThrottle();
+
 /**
  * Build the handlers that route Claude events back to Slack.
  * In a channel, threadTs scopes replies to the thread. In a DM, threadTs is
@@ -297,13 +301,22 @@ function handlersFor(
 	threadTs?: string,
 ): ThreadHandlers {
 	const sessionKey = threadTs ?? channel;
-	const post = (extra: {
+	const throttleKey = threadTs ?? channel;
+	const post = async (extra: {
 		text: string;
 		blocks?: ReturnType<typeof permissionBlocks>;
-	}) => app.client.chat.postMessage({ channel, thread_ts: threadTs, ...extra });
+	}) => {
+		await slackThrottle.enqueue(throttleKey);
+		return app.client.chat.postMessage({
+			channel,
+			thread_ts: threadTs,
+			...extra,
+		});
+	};
 
 	const poster: SlackPoster = {
 		post: async (text) => {
+			await slackThrottle.enqueue(throttleKey);
 			const res = await app.client.chat.postMessage({
 				channel,
 				thread_ts: threadTs,
@@ -312,6 +325,7 @@ function handlersFor(
 			return res.ts as string;
 		},
 		update: async (ts, text) => {
+			await slackThrottle.enqueue(throttleKey);
 			await app.client.chat.update({ channel, ts, text });
 		},
 	};
