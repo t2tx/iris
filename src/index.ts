@@ -302,32 +302,32 @@ function handlersFor(
 ): ThreadHandlers {
 	const sessionKey = threadTs ?? channel;
 	const throttleKey = threadTs ?? channel;
-	const post = async (extra: {
+	const post = (extra: {
 		text: string;
 		blocks?: ReturnType<typeof permissionBlocks>;
-	}) => {
-		await slackThrottle.enqueue(throttleKey);
-		return app.client.chat.postMessage({
-			channel,
-			thread_ts: threadTs,
-			...extra,
-		});
-	};
-
-	const poster: SlackPoster = {
-		post: async (text) => {
-			await slackThrottle.enqueue(throttleKey);
-			const res = await app.client.chat.postMessage({
+	}) =>
+		slackThrottle.enqueue(throttleKey, () =>
+			app.client.chat.postMessage({
 				channel,
 				thread_ts: threadTs,
-				text,
-			});
-			return res.ts as string;
-		},
-		update: async (ts, text) => {
-			await slackThrottle.enqueue(throttleKey);
-			await app.client.chat.update({ channel, ts, text });
-		},
+				...extra,
+			}),
+		);
+
+	const poster: SlackPoster = {
+		post: (text) =>
+			slackThrottle.enqueue(throttleKey, async () => {
+				const res = await app.client.chat.postMessage({
+					channel,
+					thread_ts: threadTs,
+					text,
+				});
+				return res.ts as string;
+			}),
+		update: (ts, text) =>
+			slackThrottle.enqueue(throttleKey, () =>
+				app.client.chat.update({ channel, ts, text }).then(() => {}),
+			),
 	};
 
 	const getStream = (): StreamBuffer => {

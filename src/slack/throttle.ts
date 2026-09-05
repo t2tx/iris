@@ -17,9 +17,10 @@ function sleep(ms: number): Promise<void> {
 /**
  * A per-key (typically thread_ts or channel) serialising throttle.
  *
- * Every call to `enqueue(key)` returns a promise that resolves only after
- * `minIntervalMs` has elapsed since the *previous* call for the same key
- * completed.  Calls are chained so concurrent enqueues never overlap.
+ * Every call to `enqueue(key, op)` returns a promise that resolves with the
+ * operation's return value.  The operation runs only after `minIntervalMs` has
+ * elapsed since the *previous* operation for the same key settled.  Operations
+ * are chained so concurrent enqueues never overlap.
  */
 export class SlackThrottle {
 	private readonly minIntervalMs: number;
@@ -33,18 +34,33 @@ export class SlackThrottle {
 	}
 
 	/**
-	 * Wait until it is safe to send to `key`.  Returns a promise that resolves
-	 * once the minimum interval has been respected.
+	 * Schedule `op` after the minimum interval for `key` has elapsed.
+	 * The operation runs inside the per-key chain so concurrent enqueues
+	 * are fully serialised — the next operation cannot start until the
+	 * previous one settles AND the interval elapses.
 	 */
-	enqueue(key: string): Promise<void> {
+	enqueue<T>(key: string, op: () => Promise<T>): Promise<T> {
 		const prev = this.chains.get(key) ?? Promise.resolve();
-		const next = prev.then(() => this.waitMinInterval(key));
-		// Swallow errors so a failed send doesn't break the chain for later callers.
+		// Build a chain link: wait interval → run op → record lastSend.
+		// The result is extracted via a shared variable because the chain
+		// type is Promise<void> (it must not carry the value).
+		let result: T;
+		const next = prev
+			.then(() => this.waitMinInterval(key))
+			.then(() => op())
+			.then((v) => {
+				result = v;
+				this.lastSend.set(key, Date.now());
+			});
+		// Swallow errors so a failed op doesn't break the chain for later callers.
 		this.chains.set(
 			key,
-			next.catch(() => {}),
+			next.catch(() => {
+				// Still record lastSend on failure so the interval applies.
+				this.lastSend.set(key, Date.now());
+			}),
 		);
-		return next;
+		return next.then(() => result);
 	}
 
 	private async waitMinInterval(key: string): Promise<void> {
@@ -52,6 +68,5 @@ export class SlackThrottle {
 		const last = this.lastSend.get(key) ?? 0;
 		const wait = Math.max(0, this.minIntervalMs - (now - last));
 		if (wait > 0) await sleep(wait);
-		this.lastSend.set(key, Date.now());
 	}
 }
