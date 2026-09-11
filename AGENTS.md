@@ -58,6 +58,7 @@ Slack のスレッドから、ローカルで動く agent プロセスを操作�
 | `src/dedup.ts` | 重複検出（同一メッセージの再処理防止） |
 | `src/log.ts` | レベル付きロガー |
 | `src/slack/messages.ts` | Slack メッセージ投稿ユーティリティ |
+| `src/slack/thread-history.ts` | `/switch` 用にスレッドのユーザー発言を読み出す（Claude は cwd をまたいで resume できないため、切替時は respawn し文脈を Slack から再注入する） |
 
 ## ディレクトリ構成
 
@@ -88,6 +89,8 @@ iris/
 │   ├── stream-buffer.ts      # ストリームバッファ
 │   ├── dedup.ts              # 重複検出
 │   ├── log.ts                # ロガー
+│   ├── slack/
+│   │   └── thread-history.ts # /switch の文脈引き継ぎ
 │   ├── backends/
 │   │   └── claude.ts         # Claude Code CLI backend
 │   └── slack/

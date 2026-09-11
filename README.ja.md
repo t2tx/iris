@@ -204,7 +204,9 @@ iris status     # launchd の稼働確認（macOS のみ）
 - ユーザー → AI への画像 / ファイル送信（画像は直接認識、ファイルは読み込み）
 - AI → ユーザーへの生成ファイル送信
 - スラッシュコマンド（`/help` `/status` `/sessions` `/restart` `/clear` `/switch` `/resume` `/summary` `/cc:`）
-- `/switch <name>` でセッションごとに作業ディレクトリを切り替え（`work_dir` 配下を検索）
+- `/switch <name>` でセッションごとに作業ディレクトリを切り替え（`work_dir` 配下を検索）。
+  切替時はスレッドの会話（ユーザー発言の直近 100 件）を引き継ぐので、経緯を言い直す必要はない
+  （文脈を捨てたいときは `/clear`）
 - `/resume` で過去のセッション一覧を表示（claude のみ・ターン数・直近の発言つき）、`/resume <id>` でセッション id で再接続（全 backend で可）
 - `/summary` で現在の会話を引き継ぎ用に要約（コードブロックで出力）、`/summary <要望>` で指示を指定
 - `/cc:<command> [args]` で Claude Code 側の `/<command>` を実行（**Claude バックエンドのみ**。pi/hermes スレッドではテキストをそのままプロンプトとして渡します）

@@ -44,6 +44,7 @@ import {
 	type InboundMessage,
 	type SlackFile,
 } from "./slack/messages.js";
+import { fetchThreadHistory } from "./slack/thread-history.js";
 import { SlackThrottle } from "./slack/throttle.js";
 import { type SlackPoster, StreamBuffer } from "./stream-buffer.js";
 
@@ -447,6 +448,17 @@ async function tryCommand(
 		baseWorkDir: project.workDir,
 		agentKind: project.agent,
 		model: project.model,
+		// Only a threaded conversation has history to carry over. A DM has no
+		// thread_ts (the channel is the session), so /switch there behaves as
+		// before and starts fresh.
+		readThreadHistory: threadTs
+			? () =>
+					fetchThreadHistory(
+						(args) => app.client.conversations.replies(args),
+						channel,
+						threadTs,
+					)
+			: undefined,
 	});
 	if (!result) return false;
 	// Log only the command name, never the full input — a command argument
