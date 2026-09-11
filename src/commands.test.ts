@@ -24,6 +24,8 @@ function makeCtx(overrides?: Partial<CommandContext>): CommandContext {
 		setWorkDirOverride: async () => {},
 		clearWorkDirOverride: async () => {},
 		setResumeId: async () => {},
+		setCarryOver: () => {},
+		clearCarryOver: () => {},
 		getModelOverride: () => undefined,
 		clearModelOverride: () => {},
 		setSessionModel: () => {},
@@ -346,6 +348,146 @@ describe("/switch command", async () => {
 		const result = await handleCommand("/switch nonexistent-xyz", makeCtx());
 		expect(result).toBeTruthy();
 		expect(result?.text.includes("No directory matching")).toBeTruthy();
+	});
+
+	// The success path had no coverage at all, so the override/clearSession
+	// pairing could be changed without a red test. Each case builds a real
+	// directory because cmdSwitch resolves the target on disk.
+	describe("/switch <name> (success path)", () => {
+		function withTargetDir(
+			body: (
+				base: string,
+				name: string,
+				spy: Record<string, unknown>,
+			) => Promise<void>,
+		) {
+			return async () => {
+				const base = mkdtempSync(join(tmpdir(), "iris-switch-"));
+				const name = "target-repo";
+				mkdirSync(join(base, name));
+				const spy: Record<string, unknown> = {};
+				try {
+					await body(base, name, spy);
+				} finally {
+					rmSync(base, { recursive: true, force: true });
+				}
+			};
+		}
+
+		it(
+			"sets the override and clears the session (respawn in the new dir)",
+			withTargetDir(async (base, name) => {
+				let overrideTo = "";
+				let cleared = false;
+				const result = await handleCommand(
+					`/switch ${name}`,
+					makeCtx({
+						baseWorkDir: base,
+						manager: {
+							...makeCtx().manager,
+							setWorkDirOverride: (_k: string, dir: string) => {
+								overrideTo = dir;
+							},
+							clearSession: () => {
+								cleared = true;
+								return true;
+							},
+						} as unknown as SessionManager,
+					}),
+				);
+				expect(result?.text.includes("Switched to")).toBeTruthy();
+				expect(overrideTo).toBe(join(base, name));
+				// clearSession, not killSession: resuming the old session id in the
+				// new dir makes Claude exit code 1 and never reply (#15).
+				expect(cleared).toBeTruthy();
+			}),
+		);
+
+		it(
+			"queues the thread's history as a carry-over",
+			withTargetDir(async (base, name) => {
+				let carried = "";
+				const result = await handleCommand(
+					`/switch ${name}`,
+					makeCtx({
+						baseWorkDir: base,
+						readThreadHistory: async () => ["調べて", "なぜ？"],
+						manager: {
+							...makeCtx().manager,
+							setCarryOver: (_k: string, text: string) => {
+								carried = text;
+							},
+						} as unknown as SessionManager,
+					}),
+				);
+				expect(carried).toContain("- 調べて");
+				expect(carried).toContain("- なぜ？");
+				expect(result?.text).toContain("Carrying over 2 message(s)");
+			}),
+		);
+
+		it(
+			"falls back to a fresh session when the thread cannot be read",
+			withTargetDir(async (base, name) => {
+				let carried = false;
+				const result = await handleCommand(
+					`/switch ${name}`,
+					makeCtx({
+						baseWorkDir: base,
+						// fetchThreadHistory swallows Slack errors and yields [].
+						readThreadHistory: async () => [],
+						manager: {
+							...makeCtx().manager,
+							setCarryOver: () => {
+								carried = true;
+							},
+						} as unknown as SessionManager,
+					}),
+				);
+				expect(carried).toBe(false);
+				expect(result?.text).toContain("fresh session");
+			}),
+		);
+
+		it(
+			"carries nothing when the context has no reader (DM / non-Slack)",
+			withTargetDir(async (base, name) => {
+				let carried = false;
+				const result = await handleCommand(
+					`/switch ${name}`,
+					makeCtx({
+						baseWorkDir: base,
+						manager: {
+							...makeCtx().manager,
+							setCarryOver: () => {
+								carried = true;
+							},
+						} as unknown as SessionManager,
+					}),
+				);
+				expect(carried).toBe(false);
+				expect(result?.text).toContain("fresh session");
+			}),
+		);
+	});
+
+	it("/switch - also carries the thread over", async () => {
+		let carried = "";
+		const result = await handleCommand(
+			"/switch -",
+			makeCtx({
+				readThreadHistory: async () => ["前の話"],
+				manager: {
+					...makeCtx().manager,
+					getWorkDirOverride: () => "/mock/work/argus",
+					setCarryOver: (_k: string, text: string) => {
+						carried = text;
+					},
+				} as unknown as SessionManager,
+			}),
+		);
+		expect(carried).toContain("- 前の話");
+		expect(result?.text).toContain("Carrying over 1 message(s)");
 	});
 });
 

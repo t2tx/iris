@@ -67,7 +67,9 @@ Slack (Socket Mode) ──▶ index.ts ──▶ session.ts ──▶ <backend> 
 - Inbound image & file attachments (images seen directly, files read)
 - Outbound generated-file uploads
 - Slash commands (`/help` `/status` `/sessions` `/restart` `/clear` `/switch` `/resume` `/summary` `/cc:`)
-- `/switch <name>` to change the working directory per session (searches under `work_dir`)
+- `/switch <name>` to change the working directory per session (searches under `work_dir`).
+  It carries the thread's conversation over (your last 100 messages), so you don't have to
+  repeat the background (use `/clear` when you do want a clean slate)
 - `/resume` lists past Claude sessions (with turn count & recent prompts); `/resume <id>` reattaches the thread to a session by id (any backend)
 - `/summary` summarizes the current conversation for handover (output wrapped in a code block); `/summary <request>` uses your own instruction
 - `/cc:<command> [args]` runs Claude Code's own `/<command>` (Claude backend only — for a pi/hermes thread the text is sent as a normal prompt instead)

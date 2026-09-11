@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -394,5 +394,102 @@ test("listModelsFor / currentModelFor reflect a live session's model surface", a
 		expect(mgr.currentModelFor("t1")?.id).toBe("deepseek-v4-flash");
 	} finally {
 		mgr.closeAll();
+	}
+});
+
+// ── /switch carry-over ─────────────────────────────────────────────────────
+
+test("appends a queued carry-over to the next spawn's system prompt, once", () => {
+	let capturedPrompt = "";
+	let spawns = 0;
+	const mgr = new SessionManager({
+		bin: FAKE_CLAUDE,
+		workDir: process.cwd(),
+		mode: "auto",
+		appendSystemPrompt: (workDir, sessionKey) =>
+			`outbox:${workDir}/.iris/outbox/${sessionKey}`,
+		createProcess: (opts: AgentOptions, _mode: PermissionMode) => {
+			capturedPrompt = opts.appendSystemPrompt ?? "";
+			spawns++;
+			return makeFakeProcess();
+		},
+		now: () => 1_000_000,
+	});
+	try {
+		mgr.setCarryOver("t1", "PRIOR CONTEXT");
+		mgr.send("t1", "hi", noopHandlers);
+		expect(spawns).toBe(1);
+		// The carry-over rides alongside the outbox contract, not instead of it.
+		expect(capturedPrompt).toContain("PRIOR CONTEXT");
+		expect(capturedPrompt).toContain(
+			join(process.cwd(), ".iris", "outbox", "t1"),
+		);
+
+		// One-shot: a later respawn (idle resume, /restart) must not re-inject it.
+		mgr.clearSession("t1");
+		mgr.send("t1", "again", noopHandlers);
+		expect(spawns).toBe(2);
+		expect(capturedPrompt).not.toContain("PRIOR CONTEXT");
+	} finally {
+		mgr.closeAll();
+	}
+});
+
+test("clearCarryOver drops a queued carry-over before it is consumed", () => {
+	let capturedPrompt = "";
+	const mgr = new SessionManager({
+		bin: FAKE_CLAUDE,
+		workDir: process.cwd(),
+		mode: "auto",
+		createProcess: (opts: AgentOptions, _mode: PermissionMode) => {
+			capturedPrompt = opts.appendSystemPrompt ?? "";
+			return makeFakeProcess();
+		},
+		now: () => 1_000_000,
+	});
+	try {
+		mgr.setCarryOver("t1", "PRIOR CONTEXT");
+		mgr.clearCarryOver("t1"); // what /clear does
+		mgr.send("t1", "hi", noopHandlers);
+		expect(capturedPrompt).not.toContain("PRIOR CONTEXT");
+	} finally {
+		mgr.closeAll();
+	}
+});
+
+// Regression for #15: /switch must not leave a stored session id behind, or a
+// later respawn resumes a session belonging to the OLD dir and Claude exits
+// code 1 without ever replying. The idle reaper reaches this path with no user
+// action, so assert the combination explicitly.
+test("a work-dir override never resumes a session id from the previous dir", () => {
+	const overrideDir = mkdtempSync(join(tmpdir(), "iris-carry-"));
+	const seen: { workDir: string; resume?: string }[] = [];
+	const mgr = new SessionManager({
+		bin: FAKE_CLAUDE,
+		workDir: process.cwd(),
+		mode: "auto",
+		createProcess: (opts: AgentOptions, _mode: PermissionMode) => {
+			seen.push({ workDir: opts.workDir, resume: opts.resume });
+			const p = makeFakeProcess();
+			p.getSessionId = () => "sid-from-old-dir";
+			return p;
+		},
+		now: () => 1_000_000,
+	});
+	try {
+		mgr.send("t1", "hi", noopHandlers);
+		expect(seen[0]?.resume).toBeUndefined();
+
+		// What /switch does: override the dir and clear the session (not kill).
+		mgr.setWorkDirOverride("t1", overrideDir);
+		mgr.clearSession("t1");
+		mgr.setCarryOver("t1", "PRIOR CONTEXT");
+		mgr.send("t1", "in new dir", noopHandlers);
+
+		expect(seen[1]?.workDir).toBe(overrideDir);
+		expect(seen[1]?.resume).toBeUndefined(); // the #15 failure mode
+	} finally {
+		mgr.closeAll();
+		rmSync(overrideDir, { recursive: true, force: true });
 	}
 });

@@ -118,6 +118,11 @@ export class SessionManager {
 	>();
 	// Pending --resume target set by /resume, applied on the next spawn.
 	private readonly resumeOverrides = new Map<string, string>();
+	// Pending conversation carry-over set by /switch, appended to the system
+	// prompt of the next spawn and then consumed. Claude cannot resume a session
+	// across working directories, so /switch must respawn; this is what keeps
+	// the thread's context from being lost when it does.
+	private readonly carryOvers = new Map<string, string>();
 	private readonly now: () => number;
 	private readonly createProcess: (
 		opts: AgentOptions,
@@ -185,6 +190,21 @@ export class SessionManager {
 		const entry = this.entries.get(sessionKey);
 		if (entry?.proc.isAlive()) entry.proc.close();
 		this.entries.delete(sessionKey);
+	}
+
+	/**
+	 * Queue a block of context to append to the next spawn's system prompt for
+	 * this session. One-shot: consumed by the next spawn (like resumeOverrides),
+	 * so a later respawn — an idle-reaper resume, /restart — does not re-inject
+	 * a stale carry-over.
+	 */
+	setCarryOver(sessionKey: string, text: string): void {
+		if (text) this.carryOvers.set(sessionKey, text);
+	}
+
+	/** Drop a queued carry-over without spawning (e.g. /clear). */
+	clearCarryOver(sessionKey: string): void {
+		this.carryOvers.delete(sessionKey);
 	}
 
 	/** Override the working directory for a specific session (thread). */
@@ -311,10 +331,18 @@ export class SessionManager {
 		// the session key, so if the prompt is a builder, resolve it here — where
 		// both are known — to this spawn's concrete prompt. This keeps the prompt and
 		// later drain on the same outbox even under a work-dir override.
-		const appendSystemPrompt =
+		const basePrompt =
 			typeof this.cfg.appendSystemPrompt === "function"
 				? this.cfg.appendSystemPrompt(workDir, threadTs)
 				: this.cfg.appendSystemPrompt;
+		// A /switch carry-over rides on the system prompt, so it reaches every
+		// backend through the same path and needs no per-backend support. It is
+		// consumed here: the next spawn starts clean unless /switch queues another.
+		const carryOver = this.carryOvers.get(threadTs);
+		this.carryOvers.delete(threadTs);
+		const appendSystemPrompt = carryOver
+			? `${basePrompt ? `${basePrompt}\n\n` : ""}${carryOver}`
+			: basePrompt;
 		const proc = this.createProcess(
 			{
 				bin: this.cfg.bin,

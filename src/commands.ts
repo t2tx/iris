@@ -10,6 +10,7 @@ import { basename, join } from "node:path";
 import { listClaudeSessions } from "./claude-sessions.js";
 import type { AgentKind } from "./config.js";
 import type { SessionManager } from "./session.js";
+import { renderCarryOver } from "./slack/thread-history.js";
 
 export interface CommandContext {
 	sessionKey: string;
@@ -21,6 +22,13 @@ export interface CommandContext {
 	agentKind: AgentKind;
 	/** The project's default model ("provider/id"), shown as the base in /model. */
 	model?: string;
+	/**
+	 * Read this thread's human turns, for carrying context across a /switch.
+	 * Injected (rather than calling Slack here) so commands.ts stays free of
+	 * Bolt and remains unit-testable; omitted for non-Slack callers and in
+	 * tests, in which case /switch simply carries nothing over.
+	 */
+	readThreadHistory?: () => Promise<string[]>;
 }
 
 export interface CommandResult {
@@ -200,6 +208,9 @@ function cmdRestart(ctx: CommandContext): CommandResult {
 
 function cmdClear(ctx: CommandContext): CommandResult {
 	ctx.manager.clearSession(ctx.sessionKey);
+	// /clear means "forget this conversation" — that must include a carry-over
+	// a /switch queued but no spawn has consumed yet.
+	ctx.manager.clearCarryOver(ctx.sessionKey);
 	return {
 		text: "🧹 Conversation cleared. A fresh session starts on your next message.",
 	};
@@ -257,7 +268,38 @@ export function findDirectories(
 	return exact.length > 0 ? exact : results;
 }
 
-function cmdSwitch(arg: string, ctx: CommandContext): CommandResult {
+/**
+ * Queue the thread's context for the next spawn and describe what happened.
+ *
+ * Claude persists a session under the cwd it started in and cannot resume it
+ * from another directory, so /switch must respawn (see #15: resuming the old
+ * session id in a new dir makes Claude exit code 1 and never reply). The
+ * conversation is therefore re-seeded from the Slack thread instead.
+ *
+ * Returns the line to append to the switch message: the carry-over is a
+ * convenience, so a failure to read the thread degrades to a fresh session
+ * and says so rather than failing the switch.
+ */
+async function queueCarryOver(
+	ctx: CommandContext,
+	previousDir: string,
+): Promise<string> {
+	if (!ctx.readThreadHistory) {
+		return "A fresh session starts on your next message.";
+	}
+	const turns = await ctx.readThreadHistory();
+	const carry = renderCarryOver(turns, previousDir);
+	if (!carry) {
+		return "A fresh session starts on your next message.";
+	}
+	ctx.manager.setCarryOver(ctx.sessionKey, carry);
+	return `Carrying over ${turns.length} message(s) from this thread.`;
+}
+
+async function cmdSwitch(
+	arg: string,
+	ctx: CommandContext,
+): Promise<CommandResult> {
 	const current = ctx.manager.getEffectiveWorkDir(ctx.sessionKey);
 
 	// No arg → show current
@@ -281,8 +323,9 @@ function cmdSwitch(arg: string, ctx: CommandContext): CommandResult {
 		// next message starts fresh in the default dir instead of trying to
 		// --resume a session that belongs to the previous working directory.
 		ctx.manager.clearSession(ctx.sessionKey);
+		const note = await queueCarryOver(ctx, current);
 		return {
-			text: `🏠 Switched back to default: \`${ctx.baseWorkDir}\`. A fresh session starts on your next message.`,
+			text: `🏠 Switched back to default: \`${ctx.baseWorkDir}\`. ${note}`,
 		};
 	}
 
@@ -311,9 +354,8 @@ function cmdSwitch(arg: string, ctx: CommandContext): CommandResult {
 	// a session from the old working directory in the new dir fails (Claude exits
 	// with code 1), so start a fresh session in the new dir instead.
 	ctx.manager.clearSession(ctx.sessionKey);
-	return {
-		text: `➡️ Switched to \`${target}\`. A fresh session starts on your next message.`,
-	};
+	const note = await queueCarryOver(ctx, current);
+	return { text: `➡️ Switched to \`${target}\`. ${note}` };
 }
 
 // ── /resume ────────────────────────────────────────────────────────────────
