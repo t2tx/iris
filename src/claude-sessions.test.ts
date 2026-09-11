@@ -1,13 +1,59 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { listClaudeSessions, projectDir } from "./claude-sessions.js";
 
 describe("projectDir", () => {
+	const projects = (name: string): string =>
+		join(homedir(), ".claude", "projects", name);
+
 	it("encodes a work dir by replacing / with -", () => {
-		const p = projectDir("/Users/me/work");
-		expect(p).toBe(join(homedir(), ".claude", "projects", "-Users-me-work"));
+		expect(projectDir("/Users/me/work")).toBe(projects("-Users-me-work"));
+	});
+
+	// Claude Code collapses `.` and `_` to `-` as well. Encoding only `/` sent
+	// /resume to a directory the CLI never writes, so it silently listed no
+	// sessions for any work dir containing those characters (e.g. mile_service).
+	it("collapses . and _ to - as well", () => {
+		expect(projectDir("/Users/me/mile_service")).toBe(
+			projects("-Users-me-mile-service"),
+		);
+		expect(projectDir("/Users/me/iris-oss.old")).toBe(
+			projects("-Users-me-iris-oss-old"),
+		);
+		expect(projectDir("/Users/me/.worktrees/foo")).toBe(
+			projects("-Users-me--worktrees-foo"),
+		);
+	});
+
+	// The CLI resolves the cwd before encoding, so a symlinked work dir must
+	// encode to its real path (on macOS /tmp is a symlink to /private/tmp).
+	it("resolves symlinks before encoding", () => {
+		const real = mkdtempSync(join(tmpdir(), "iris-real-"));
+		const link = join(tmpdir(), `iris-link-${Date.now()}`);
+		try {
+			symlinkSync(real, link);
+			expect(projectDir(link)).toBe(projectDir(realpathSync(real)));
+		} finally {
+			rmSync(link, { force: true });
+			rmSync(real, { recursive: true, force: true });
+		}
+	});
+
+	// A work dir that no longer exists cannot be resolved; fall back to the raw
+	// path rather than throwing, so /resume degrades to "no sessions".
+	it("falls back to the raw path when the dir does not exist", () => {
+		expect(projectDir("/nonexistent-xyz/work")).toBe(
+			projects("-nonexistent-xyz-work"),
+		);
 	});
 });
 

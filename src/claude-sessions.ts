@@ -2,12 +2,12 @@
  * claude-sessions.ts — read Claude Code's persisted sessions for a work dir.
  *
  * Claude Code stores each session as a JSONL file under
- * `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`, where the cwd is
- * encoded by replacing every `/` with `-`. These files survive Iris
- * restarts, so /resume can list them and reconnect a thread to one.
+ * `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`. These files survive
+ * Iris restarts, so /resume can list them and reconnect a thread to one.
+ * The encoding is described on projectDir below.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -22,9 +22,31 @@ export interface ClaudeSession {
 	turns: number; // number of human turns (a rough size signal)
 }
 
-/** Map a working directory to its Claude projects dir (… / → -). */
+/**
+ * Map a working directory to its Claude projects dir.
+ *
+ * Claude Code resolves the cwd (following symlinks) and then collapses `/`,
+ * `.` and `_` to `-`. Verified against the CLI: cwd `/tmp/enc_probe.y_z`
+ * (where macOS `/tmp` is a symlink to `/private/tmp`) yields the directory
+ * `-private-tmp-enc-probe-y-z`.
+ *
+ * NOTE: this encoding is an undocumented internal of a separately-versioned
+ * binary, so it can change. Avoid building new features on top of it; when
+ * this breaks, the encoding-independent fix is to scan `~/.claude/projects/`
+ * and match each session's recorded `cwd` field instead.
+ *
+ * `realpathSync` throws when the dir does not exist (e.g. a work dir that was
+ * removed, or a unit test using a fabricated path); fall back to the raw path
+ * so the caller still gets a well-formed — if unresolved — directory name.
+ */
 export function projectDir(workDir: string): string {
-	const encoded = workDir.replace(/\//g, "-");
+	let resolved: string;
+	try {
+		resolved = realpathSync(workDir);
+	} catch {
+		resolved = workDir;
+	}
+	const encoded = resolved.replace(/[/._]/g, "-");
 	return join(homedir(), ".claude", "projects", encoded);
 }
 
