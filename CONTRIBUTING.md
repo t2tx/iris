@@ -162,6 +162,7 @@ pnpm build:sea:signed
 
 3. ワークフローが走る:
    - `npm` ジョブ: タグと version の一致を検証 → `npm publish --access public`
+     （認証は Trusted Publishing / OIDC。公開に使う npm は 11.x に完全ピン）
    - `macos-binary` ジョブ（macOS runner）: SEA バイナリをビルド・署名・公証 →
      GitHub Release に `iris-macos-arm64.zip` を添付
 
@@ -171,11 +172,25 @@ pnpm build:sea:signed
 
 | Secret | 用途 |
 |--------|------|
-| `NPM_TOKEN` | npm publish（npmjs.com の自動化トークン） |
 | `MACOS_CERT_P12` | Developer ID Application 証明書（.p12 を base64 化） |
 | `MACOS_CERT_PASSWORD` | 上記 .p12 のパスワード |
 | `MACOS_SIGN_IDENTITY` | 例 `Developer ID Application: NAME (TEAMID)` |
 | `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_PASSWORD` | notarization 用 |
+
+**npm の秘密は不要**（`release.yml` の `npm` ジョブに `id-token: write` があり、
+`npm publish` は `NODE_AUTH_TOKEN` を参照しない）。アクセストークンは最長 90 日で必ず失効し、
+そのたびにリリースが止まる（v0.4.1 で実際に止まった）。OIDC で発行されるトークンは短期で、
+リポジトリとワークフローに紐づくため抜き出して再利用できない。provenance attestation も
+自動で付く（`--provenance` は不要）。
+
+必要なのは GitHub 側ではなく **npm 側の登録**:
+`@t2tx/iris` の *Automations → Trusted publishing* にリポジトリ `t2tx/iris` と
+ワークフロー名 `release.yml` を登録し、Allowed actions に直接公開 `npm publish` を含める。
+`npm stage publish` は常に許可されるが、直接公開は**別の許可項目**（2026-09-03 以降に作られた
+設定は stage のみが既定）。ファイル名は大文字小文字まで完全一致。npm は設定を保存時に検証
+しないため、**不一致は公開を試みたときに初めて表れる**。
+
+なお旧 `NPM_TOKEN` secret は削除せず残置しているが、ワークフローはもう参照しない。
 
 ### 利用者のインストール
 

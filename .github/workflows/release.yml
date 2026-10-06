@@ -9,8 +9,24 @@ permissions:
 
 jobs:
   # Publish the npm package (public). Verifies tag == package.json version.
+  #
+  # 認証は Trusted Publishing（OIDC）。npm アクセストークンは使わない。
+  # トークンは最長 90 日で失効し、そのたびにリリースが止まる（v0.4.1 で実測）。
+  # 恒久対策として、秘密の差し替えを不要にする。
+  #
+  # 前提（npm 側の設定。コードでは保証できない）:
+  #   - Automations > Trusted publishing に t2tx/iris + `release.yml` を登録済みであること。
+  #     リポジトリとワークフロー**ファイル名**の完全一致照合で、不一致は公開試行時にしか
+  #     表れない（npm は設定を保存時に検証しない）。
+  #   - Allowed actions に直接公開 `npm publish` を含むこと。`npm stage publish` は常に
+  #     許可されるが、直接公開は別の許可項目（2026-09-03 以降の設定は stage のみが既定）。
+  #   - provenance attestation は trusted publishing では自動付与。--provenance は不要。
   npm:
     runs-on: ubuntu-latest
+    permissions:
+      # ジョブ指定はワークフロー指定を**置き換える**ため contents も明記する。
+      contents: read
+      id-token: write # OIDC トークンの取得に必須。ないと公開できない
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
@@ -25,9 +41,13 @@ jobs:
       - name: Check tag matches package.json version
         run: test "${GITHUB_REF_NAME}" = "v$(node -p "require('./package.json').version")"
       - run: pnpm build
+      # Trusted publishing は npm CLI 11.5.1 以上が必須。Node 22.18.0 の同梱 npm は
+      # 10.9.3（配布 tar の lib/node_modules/npm/package.json で実測）なので不足。
+      # Node 自体は .node-version と他ジョブが 22.18.0 で揃っているため動かさず、
+      # 公開に使う npm だけを**完全ピン**で差し替える（range 指定は supply chain で不可解になる）。
+      # npm 12 は Node ^22.22.2 以上を要求するので 22.18.0 では使えず、11.x が上限。
+      - run: npm install -g npm@11.21.0
       - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # Build, sign, notarize the macOS arm64 binary and attach it to the Release.
   # macOS runners are free on GitHub — this is what GitLab.com could not do.
