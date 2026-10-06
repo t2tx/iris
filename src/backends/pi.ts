@@ -110,6 +110,20 @@ export class PiProcess extends EventEmitter implements AgentProcess {
 		// is a scoping measure, not a filesystem boundary.
 		if (opts.sessionDir) args.push("--session-dir", opts.sessionDir);
 
+		// Outbox contract injection (same text every backend receives; see
+		// index.ts#buildSystemPrompt). Unlike Copilot — whose ACP protocol has no
+		// per-session prompt carrier, forcing the contract onto a separate
+		// instructions file (copilot.ts) — Pi takes the same claude-style flag, so
+		// the text rides argv directly. Chain verified in pi 0.84.4 dist:
+		// cli/args.js parses the flag (repeatable), resource-loader.js
+		// resolvePromptInput() treats a value as TEXT unless the WHOLE string is
+		// an existing path (the contract is multi-line, so it never is), and
+		// core/system-prompt.js appends it in every mode including rpc. The text
+		// contains only the outbox path — no conversation content — so argv
+		// visibility (`ps`) carries no more than claude.ts already exposes.
+		if (opts.appendSystemPrompt)
+			args.push("--append-system-prompt", opts.appendSystemPrompt);
+
 		// detached: own process group so we can kill the whole tree with a
 		// single negative-pid signal.
 		this.proc = spawn(opts.bin, args, {

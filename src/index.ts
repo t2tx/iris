@@ -63,8 +63,16 @@ const CONFIG_PATH = resolveConfigPath();
  * Build the appended system prompt for a project, pointing its agent at that
  * project's outbox.
  *
- * Outbound file delivery is an EXPLICIT outbox contract, identical for both
- * backends (Claude and Pi). To send a file, the agent writes it to
+ * Outbound file delivery is an EXPLICIT outbox contract. The text below is
+ * identical for every backend; only the CARRIER differs, per what each agent
+ * CLI accepts (each verified in its backend source):
+ *   - Claude / Pi: `--append-system-prompt` argv (the flag exists in both CLIs;
+ *     Pi's parser treats a value as text unless the whole string is an existing
+ *     path, so multi-line contract text rides verbatim)
+ *   - Copilot: per-session instruction files under ~/.iris-slack, exported via
+ *     COPILOT_CUSTOM_INSTRUCTIONS_DIRS (its ACP protocol has no prompt flag)
+ *   - Hermes: SOUL.md inside the per-session HERMES_HOME (auto-loaded)
+ * To send a file, the agent writes it to
  * <workDir>/.iris/outbox/; Iris uploads everything there and clears it. There is
  * NO scanning of the reply text for paths — so the agent must NOT expect that
  * writing an absolute path into its reply transfers anything (and must not paste
