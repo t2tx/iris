@@ -1,11 +1,12 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomInt } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { AgentOptions, AgentProcess, PermissionMode } from "../agent.js";
-import type { Attachment } from "../attachments.js";
+import { type Attachment, safeSessionKey } from "../attachments.js";
 import type { ParsedEvent } from "../protocol.js";
 import { parseCopilotLine } from "./copilot-protocol.js";
 
@@ -20,9 +21,14 @@ import { parseCopilotLine } from "./copilot-protocol.js";
  *      `session/request_permission` round-trip; verified by capture). So there is
  *      no permission bridge here; `respondPermission` is a no-op. Launch-time
  *      `--allow-*` flags (issue #99) decide tool gating.
- *   2. Copilot has no per-session home / SOUL.md carrier, so this backend has no
- *      outbox-injection setup step. (The outbox contract injection for Copilot is
- *      tracked as a follow-up; see issue #99/#100.)
+ *   2. Copilot has no per-session home and no system-prompt flag, so the outbox
+ *      contract rides a third carrier (see setupOutboxInstructions): a per-session
+ *      `*.instructions.md` file named by COPILOT_CUSTOM_INSTRUCTIONS_DIRS. Claude
+ *      injects via --append-system-prompt, Hermes via SOUL.md. The contract only
+ *      gets files INTO the outbox if writes are permitted at launch: verified
+ *      end-to-end under `auto` (`--allow-all`). `acceptEdits` grants `write` so it
+ *      should work but is unmeasured; under `manual` nothing can be approved
+ *      (item 1), so the agent is told about an outbox it cannot write to.
  *
  * The one new mechanism versus Pi/Claude is JSON-RPC `id` correlation: we own the
  * request ids we send so we can distinguish the `initialize` / `session/new` /
@@ -33,6 +39,60 @@ import { parseCopilotLine } from "./copilot-protocol.js";
  *      "session"(sid) "text"(t) "thinking"(t) "tool_use"(name,input)
  *      "result"(raw,usage?) "exit"(code,signal) "error"(err) "stderr"(line)
  */
+
+/**
+ * Where the outbox contract is injected for Copilot.
+ *
+ * Verified against Copilot CLI 1.0.92 (docs `customize-copilot/add-custom-instructions`
+ * + the system prompt captured from `--log-level debug`): a `*.instructions.md`
+ * file in a directory named by COPILOT_CUSTOM_INSTRUCTIONS_DIRS is injected into
+ * the system prompt UNCONDITIONALLY (its body, verbatim), whereas an `AGENTS.md`
+ * in such a directory only gets a path listed in a "nested AGENTS.md" table the
+ * model then has to go and read — which it does not. So the carrier file must
+ * carry the `.instructions.md` suffix and must NOT declare an `applyTo` value
+ * (path-specific instructions are only pulled in when a matching file is touched).
+ *
+ * Per-session isolation is free: Iris runs one Copilot process per Slack thread,
+ * and this variable is read when the process starts, so "launch-time" is exactly
+ * "per-session" here.
+ *
+ * The directory lives under `~/.iris-slack/` (the same per-session-home convention
+ * as Hermes' HERMES_HOME) and NOT under the agent's work_dir, because the text we
+ * write is the session's whole system prompt — which after a /switch includes the
+ * user's own Slack messages carried over as context (see thread-history
+ * renderCarryOver). Dropping that inside the user's repository would put Slack
+ * conversation content one `git add .` away from a public commit. The CLI takes an
+ * absolute path here, so nothing needs to be inside the work dir (verified: a
+ * directory outside the cwd is injected verbatim).
+ */
+const COPILOT_INSTRUCTIONS_FILE = "iris-outbox.instructions.md";
+
+/** The per-session instructions directory injected via the environment. */
+export function copilotInstructionsDir(sessionKey: string): string {
+	return join(
+		homedir(),
+		".iris-slack",
+		"copilot-instructions",
+		safeSessionKey(sessionKey),
+	);
+}
+
+/**
+ * Put our directory first in a COPILOT_CUSTOM_INSTRUCTIONS_DIRS value. The CLI
+ * takes a comma-separated list, so an operator who already sets the variable
+ * keeps their directories (they are appended, and our dir is not duplicated).
+ * Pure so the merge is unit-tested without spawning anything.
+ */
+export function mergeCustomInstructionsDirs(
+	existing: string | undefined,
+	dir: string,
+): string {
+	const parts = (existing ?? "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
+	return (parts.includes(dir) ? parts : [dir, ...parts]).join(",");
+}
 
 // Seed the per-process counter from a random boot offset so instanceIds do not
 // repeat across Iris restarts (same strategy as ClaudeProcess / HermesProcess).
@@ -102,9 +162,20 @@ export class CopilotProcess extends EventEmitter implements AgentProcess {
 		// NOTE (issue #100): the negative-pid SIGTERM below is the v1 cleanup;
 		// Copilot's grandchild reaping (pkill -P / kill -9 -$pid) is hardened there.
 		const args = this.buildArgs(opts);
+		// Inject the outbox contract before spawn: the instructions directory is
+		// read at process start, so it has to exist in the env we hand over.
+		const instructionsDir = this.setupOutboxInstructions(opts);
 		this.proc = spawn(opts.bin, args, {
 			cwd: opts.workDir,
-			env: process.env,
+			env: instructionsDir
+				? {
+						...process.env,
+						COPILOT_CUSTOM_INSTRUCTIONS_DIRS: mergeCustomInstructionsDirs(
+							process.env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS,
+							instructionsDir,
+						),
+					}
+				: process.env,
 			detached: true,
 			stdio: ["pipe", "pipe", "pipe"],
 		});
@@ -324,6 +395,46 @@ export class CopilotProcess extends EventEmitter implements AgentProcess {
 			reject(err);
 		}
 		this.pending.clear();
+	}
+
+	/**
+	 * Write this session's outbox contract where the CLI will pick it up. The
+	 * text is the same builder every backend is handed (index.ts#buildSystemPrompt,
+	 * plus any /switch carry-over), so the contract itself stays backend-agnostic
+	 * and only the carrier differs.
+	 *
+	 * Rewritten on every spawn, which is what makes a /switch work-dir override
+	 * and a resumed session both land on the current session's outbox path. The
+	 * file is 0600: it can quote what the user typed in Slack, so it is not readable
+	 * by other accounts on a shared host (same reasoning as the config file).
+	 * A failure is non-fatal (the session just runs without the contract, exactly
+	 * like a Hermes SOUL.md write failure) and surfaces on "stderr" plus a direct
+	 * console.error, because a constructor-time emit has no listener yet.
+	 */
+	private setupOutboxInstructions(opts: AgentOptions): string | undefined {
+		const text = opts.appendSystemPrompt?.trim();
+		if (!text || !opts.sessionKey) return undefined;
+		const dir = copilotInstructionsDir(opts.sessionKey);
+		try {
+			mkdirSync(dir, { recursive: true });
+			const file = join(dir, COPILOT_INSTRUCTIONS_FILE);
+			writeFileSync(file, `${text}\n`, { encoding: "utf8", mode: 0o600 });
+			// writeFileSync's mode only applies on creation; force it so a file left
+			// by an older version (or a lenient umask) never survives world-readable.
+			chmodSync(file, 0o600);
+		} catch (err) {
+			// Diagnostic text only — never the instruction text, which can quote the
+			// user's own Slack messages.
+			const msg = `copilot instructions setup failed: ${(err as Error).message}`;
+			// We are still inside the constructor: session.ts subscribes to "stderr"
+			// after construction, so the event alone would be dropped and the session
+			// would silently run without the outbox contract. Log it directly too
+			// (same shape as [pi] in pi.ts) and keep the event for any listener.
+			console.error(`[copilot] ${msg}`);
+			this.emit("stderr", msg);
+			return undefined;
+		}
+		return dir;
 	}
 
 	private saveAttachment(att: Attachment): string {
