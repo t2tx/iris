@@ -1,5 +1,6 @@
 import {
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
@@ -8,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { AgentOptions, PermissionMode } from "../agent.js";
 import { CopilotProcess, mergeCustomInstructionsDirs } from "./copilot.js";
 
@@ -443,5 +444,49 @@ describe("CopilotProcess outbox contract injection", () => {
 			expect(existsSync(join(home, ".iris-slack"))).toBe(false);
 			proc.close();
 		});
+	});
+
+	test("a blocked carrier is non-fatal and still logged", async () => {
+		// Raised inside the constructor, so no "stderr" listener exists yet — the
+		// failure has to reach console.error to be observable at all.
+		const seen: unknown[][] = [];
+		const spy = vi
+			.spyOn(console, "error")
+			.mockImplementation((...args) => void seen.push(args));
+		try {
+			await withInjectedEnv(undefined, async ({ home, workDir }) => {
+				// A regular file where the carrier directory wants to be: mkdirSync
+				// then fails with ENOTDIR.
+				mkdirSync(join(home, ".iris-slack"), { recursive: true });
+				writeFileSync(
+					join(home, ".iris-slack", "copilot-instructions"),
+					"blocker",
+				);
+				const envOut = join(workDir, "env.json");
+				const proc = newProc(
+					createFakeCopilot({ FAKE_COPILOT_ENV_OUT: envOut }),
+					"auto",
+					{
+						workDir,
+						sessionKey: "1",
+						appendSystemPrompt: "OUTBOX CONTRACT",
+					},
+				);
+				// The session still starts; only the contract is missing.
+				await waitFor(proc, "session");
+				expect(injectedDirs(envOut)).toBe("");
+				proc.close();
+			});
+			expect(
+				seen.some((args) =>
+					String(args[0]).includes("copilot instructions setup failed"),
+				),
+			).toBe(true);
+			// The log line carries the error message only — never the contract text,
+			// which can quote the user's own Slack messages.
+			expect(JSON.stringify(seen)).not.toContain("OUTBOX CONTRACT");
+		} finally {
+			spy.mockRestore();
+		}
 	});
 });

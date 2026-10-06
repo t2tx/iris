@@ -137,8 +137,9 @@ allow_users = ["U09XXXXXXX"]
 - outbox 規約の文面は全バックエンド共通で、agent の system prompt に届ける**載体**だけが
   異なります（Claude = `--append-system-prompt`、Hermes = `HERMES_HOME` 下の `SOUL.md`、
   Copilot = `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` が指す `iris-outbox.instructions.md`。
-  Copilot には system prompt を渡す旗が無いため）。いずれも `~/.iris-slack/` 下に書くので、
-  プロジェクト（work_dir）内にファイルを追加することはありません。
+  Copilot には system prompt を渡す旗が無いため）。**載体ファイル**は `~/.iris-slack/` 下に
+  書くので、契約文（`/switch` 以降はスレッドの発言文を含む）がプロジェクト内に残ることは
+  ありません。受信添付と outbox 自体は従来どおり `work_dir` 下です。
 - 全バックエンドとも Slack に向けて同じ面（権限ボタン・進捗表示・セッション再開）を
   提示します。違いは駆動する CLI のみです。
 

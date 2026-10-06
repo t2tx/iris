@@ -408,7 +408,8 @@ export class CopilotProcess extends EventEmitter implements AgentProcess {
 	 * file is 0600: it can quote what the user typed in Slack, so it is not readable
 	 * by other accounts on a shared host (same reasoning as the config file).
 	 * A failure is non-fatal (the session just runs without the contract, exactly
-	 * like a Hermes SOUL.md write failure) and surfaces on "stderr".
+	 * like a Hermes SOUL.md write failure) and surfaces on "stderr" plus a direct
+	 * console.error, because a constructor-time emit has no listener yet.
 	 */
 	private setupOutboxInstructions(opts: AgentOptions): string | undefined {
 		const text = opts.appendSystemPrompt?.trim();
@@ -422,10 +423,15 @@ export class CopilotProcess extends EventEmitter implements AgentProcess {
 			// by an older version (or a lenient umask) never survives world-readable.
 			chmodSync(file, 0o600);
 		} catch (err) {
-			this.emit(
-				"stderr",
-				`copilot instructions setup failed: ${(err as Error).message}`,
-			);
+			// Diagnostic text only — never the instruction text, which can quote the
+			// user's own Slack messages.
+			const msg = `copilot instructions setup failed: ${(err as Error).message}`;
+			// We are still inside the constructor: session.ts subscribes to "stderr"
+			// after construction, so the event alone would be dropped and the session
+			// would silently run without the outbox contract. Log it directly too
+			// (same shape as [pi] in pi.ts) and keep the event for any listener.
+			console.error(`[copilot] ${msg}`);
+			this.emit("stderr", msg);
 			return undefined;
 		}
 		return dir;

@@ -209,8 +209,10 @@ The outbox contract itself is identical for every backend; only the carrier that
 reaches the agent's system prompt differs: Claude takes `--append-system-prompt`,
 Hermes a per-session `SOUL.md` under `HERMES_HOME`, Copilot an
 `iris-outbox.instructions.md` named by `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` (Copilot
-has no system-prompt flag). All of them live under `~/.iris-slack/`, so Iris never
-writes into your project directory.
+has no system-prompt flag). The carrier files all live under `~/.iris-slack/`, so
+the contract text — which after a `/switch` quotes the thread's own messages —
+never lands inside your project. Incoming attachments and the outbox itself stay
+under `work_dir`, as before.
 
 All backends expose the same surface to Slack (tool-permission buttons,
 progress, session resume); only the underlying CLI differs.
