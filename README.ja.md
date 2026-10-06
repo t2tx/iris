@@ -131,9 +131,14 @@ allow_users = ["U09XXXXXXX"]
 - **Hermes の運転**: Iris は `hermes acp` を起動するだけで、インストールも model 設定も
   行いません。Agent Client Protocol（ACP）を話す `hermes acp` に対するその ACP 依存
   （`agent-client-protocol`）の確保・model 設定は Hermes 側の手順で済ませます。PATH に
-  無ければ `hermes_bin` でパスを指定します。3 バックエンドは同一の outbox / セッション再開
+  無ければ `hermes_bin` でパスを指定します。4 バックエンドは同一の outbox / セッション再開
   規約を持ち、違いは wire プロトコルのみ（Claude Code = `stream-json`＋標準の権限ツール、
-  Pi = 独自 RPC、Hermes = ACP / JSON-RPC）。
+  Pi = 独自 RPC、Hermes と Copilot = ACP / JSON-RPC）。
+- outbox 規約の文面は全バックエンド共通で、agent の system prompt に届ける**載体**だけが
+  異なります（Claude = `--append-system-prompt`、Hermes = `HERMES_HOME` 下の `SOUL.md`、
+  Copilot = `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` が指す `iris-outbox.instructions.md`。
+  Copilot には system prompt を渡す旗が無いため）。いずれも `~/.iris-slack/` 下に書くので、
+  プロジェクト（work_dir）内にファイルを追加することはありません。
 - 全バックエンドとも Slack に向けて同じ面（権限ボタン・進捗表示・セッション再開）を
   提示します。違いは駆動する CLI のみです。
 

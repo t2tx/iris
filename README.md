@@ -201,9 +201,16 @@ Install and authenticate Pi by following the
 it or manage its model configuration. Install Hermes, configure a model, and
 ensure its ACP dependency (`agent-client-protocol`) is available, following the
 Hermes setup instructions. Point `hermes_bin` at the CLI if it is not on your
-`PATH`. The three backends share the same outbox / session-resume contract; only
-the wire protocol differs (Claude Code = `stream-json` + `std`io permission tool,
-Pi = its own RPC, Hermes = ACP / JSON-RPC).
+`PATH`. All four backends share the same outbox / session-resume contract; only
+the wire protocol differs (Claude Code = `stream-json` + `stdio` permission tool,
+Pi = its own RPC, Hermes and Copilot = ACP / JSON-RPC).
+
+The outbox contract itself is identical for every backend; only the carrier that
+reaches the agent's system prompt differs: Claude takes `--append-system-prompt`,
+Hermes a per-session `SOUL.md` under `HERMES_HOME`, Copilot an
+`iris-outbox.instructions.md` named by `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` (Copilot
+has no system-prompt flag). All of them live under `~/.iris-slack/`, so Iris never
+writes into your project directory.
 
 All backends expose the same surface to Slack (tool-permission buttons,
 progress, session resume); only the underlying CLI differs.

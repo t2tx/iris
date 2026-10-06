@@ -1,9 +1,16 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AgentOptions, PermissionMode } from "../agent.js";
-import { CopilotProcess } from "./copilot.js";
+import { CopilotProcess, mergeCustomInstructionsDirs } from "./copilot.js";
 
 /**
  * copilot.ts — fake `copilot --acp` binary strategy (mirrors hermes.test.ts):
@@ -25,6 +32,11 @@ if [ -n "$FAKE_COPILOT_ARGS_OUT" ]; then
   args=""
   for a in "$@"; do args="$args|[$a]"; done
   printf '%s' "$args" > "$FAKE_COPILOT_ARGS_OUT" 2>/dev/null || true
+fi
+
+# record the injected instructions dir (for the outbox-contract injection test)
+if [ -n "$FAKE_COPILOT_ENV_OUT" ]; then
+  printf '{"COPILOT_CUSTOM_INSTRUCTIONS_DIRS":"%s"}' "$COPILOT_CUSTOM_INSTRUCTIONS_DIRS" > "$FAKE_COPILOT_ENV_OUT" 2>/dev/null || true
 fi
 
 SID=$FAKE_COPILOT_SID
@@ -64,6 +76,7 @@ function createFakeCopilot(env: Record<string, string> = {}): string {
 	const envLines = [
 		`FAKE_COPILOT_SID='${escapeShell(env.FAKE_COPILOT_SID)}'`,
 		`FAKE_COPILOT_ARGS_OUT='${escapeShell(env.FAKE_COPILOT_ARGS_OUT)}'`,
+		`FAKE_COPILOT_ENV_OUT='${escapeShell(env.FAKE_COPILOT_ENV_OUT)}'`,
 	];
 	writeFileSync(
 		entry,
@@ -278,5 +291,157 @@ describe("CopilotProcess error", () => {
 		const procErr = await errP;
 		expect(procErr[0]).toBeInstanceOf(Error);
 		expect(proc.isAlive()).toBe(false);
+	});
+});
+
+// ── Outbox contract injection via COPILOT_CUSTOM_INSTRUCTIONS_DIRS ─────────
+
+describe("mergeCustomInstructionsDirs", () => {
+	test("our dir comes first when nothing is set", () => {
+		expect(mergeCustomInstructionsDirs(undefined, "/iris")).toBe("/iris");
+		expect(mergeCustomInstructionsDirs("", "/iris")).toBe("/iris");
+	});
+
+	test("keeps an operator's dirs and does not duplicate ours", () => {
+		expect(mergeCustomInstructionsDirs("/a, /b", "/iris")).toBe("/iris,/a,/b");
+		expect(mergeCustomInstructionsDirs("/iris,/a", "/iris")).toBe("/iris,/a");
+	});
+});
+
+describe("CopilotProcess outbox contract injection", () => {
+	/**
+	 * Run `body` with HOME pointed at a throwaway directory and
+	 * COPILOT_CUSTOM_INSTRUCTIONS_DIRS pinned to `operatorDirs` (the backend
+	 * spreads process.env, so an operator value leaking in from the developer's
+	 * shell would make the assertions flaky). os.homedir() re-reads HOME on POSIX,
+	 * and the carrier path is computed in the constructor — so it has to be set
+	 * before the process is built. A unit test must never write into the real home.
+	 */
+	function withInjectedEnv(
+		operatorDirs: string | undefined,
+		body: (ctx: { home: string; workDir: string }) => Promise<void>,
+	): Promise<void> {
+		const key = "COPILOT_CUSTOM_INSTRUCTIONS_DIRS";
+		const home = mkdtempSync(join(tmpdir(), "iris-copilot-home-"));
+		const workDir = mkdtempSync(join(tmpdir(), "iris-copilot-work-"));
+		const savedHome = process.env.HOME;
+		const savedDirs = process.env[key];
+		process.env.HOME = home;
+		if (operatorDirs === undefined) delete process.env[key];
+		else process.env[key] = operatorDirs;
+		const restore = () => {
+			if (savedHome === undefined) delete process.env.HOME;
+			else process.env.HOME = savedHome;
+			if (savedDirs === undefined) delete process.env[key];
+			else process.env[key] = savedDirs;
+			rmSync(home, { recursive: true, force: true });
+			rmSync(workDir, { recursive: true, force: true });
+		};
+		return body({ home, workDir }).then(restore, (err) => {
+			restore();
+			throw err;
+		});
+	}
+
+	/** Read back the env value the fake was spawned with. */
+	function injectedDirs(envOut: string): string {
+		const env = JSON.parse(readFileSync(envOut, "utf8")) as {
+			COPILOT_CUSTOM_INSTRUCTIONS_DIRS: string | undefined;
+		};
+		return env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? "";
+	}
+
+	test("writes the contract under ~/.iris-slack and exports that dir", async () => {
+		await withInjectedEnv(undefined, async ({ home, workDir }) => {
+			const envOut = join(workDir, "env.json");
+			const proc = newProc(
+				createFakeCopilot({ FAKE_COPILOT_ENV_OUT: envOut }),
+				"auto",
+				{
+					workDir,
+					sessionKey: "1788088102.502699",
+					appendSystemPrompt:
+						"OUTBOX CONTRACT: write files to the outbox path.",
+				},
+			);
+			await waitFor(proc, "session");
+			await new Promise((r) => setTimeout(r, 200));
+			// The raw thread_ts (with its dot) must not become a path segment.
+			const dir = join(
+				home,
+				".iris-slack",
+				"copilot-instructions",
+				"1788088102_502699",
+			);
+			expect(injectedDirs(envOut)).toBe(dir);
+			const file = join(dir, "iris-outbox.instructions.md");
+			expect(readFileSync(file, "utf8")).toContain("OUTBOX CONTRACT");
+			proc.close();
+		});
+	});
+
+	test("the carrier is 0600 and never lands in the work_dir", async () => {
+		await withInjectedEnv(undefined, async ({ home, workDir }) => {
+			const envOut = join(workDir, "env.json");
+			const proc = newProc(
+				createFakeCopilot({ FAKE_COPILOT_ENV_OUT: envOut }),
+				"auto",
+				{ workDir, sessionKey: "1", appendSystemPrompt: "OUTBOX CONTRACT" },
+			);
+			await waitFor(proc, "session");
+			await new Promise((r) => setTimeout(r, 200));
+			const file = join(
+				home,
+				".iris-slack",
+				"copilot-instructions",
+				"1",
+				"iris-outbox.instructions.md",
+			);
+			// The prompt can quote the user's own Slack text (a /switch carry-over),
+			// so it must not be readable by other accounts on a shared host.
+			expect(statSync(file).mode & 0o777).toBe(0o600);
+			// And nothing new may appear inside the user's own project directory.
+			expect(existsSync(join(workDir, ".iris"))).toBe(false);
+			proc.close();
+		});
+	});
+
+	test("an operator-set dir is kept alongside ours", async () => {
+		await withInjectedEnv(
+			"/operator/instructions",
+			async ({ home, workDir }) => {
+				const envOut = join(workDir, "env.json");
+				const proc = newProc(
+					createFakeCopilot({ FAKE_COPILOT_ENV_OUT: envOut }),
+					"auto",
+					{ workDir, sessionKey: "1", appendSystemPrompt: "OUTBOX CONTRACT" },
+				);
+				await waitFor(proc, "session");
+				await new Promise((r) => setTimeout(r, 200));
+				expect(injectedDirs(envOut)).toBe(
+					`${join(home, ".iris-slack", "copilot-instructions", "1")},/operator/instructions`,
+				);
+				proc.close();
+			},
+		);
+	});
+
+	test("no contract to inject → the env var is left untouched", async () => {
+		await withInjectedEnv(undefined, async ({ home, workDir }) => {
+			const envOut = join(workDir, "env.json");
+			const proc = newProc(
+				createFakeCopilot({ FAKE_COPILOT_ENV_OUT: envOut }),
+				"auto",
+				{
+					workDir,
+					sessionKey: "1",
+				},
+			);
+			await waitFor(proc, "session");
+			await new Promise((r) => setTimeout(r, 200));
+			expect(injectedDirs(envOut)).toBe("");
+			expect(existsSync(join(home, ".iris-slack"))).toBe(false);
+			proc.close();
+		});
 	});
 });

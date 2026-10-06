@@ -152,14 +152,20 @@ claude --output-format stream-json --input-format stream-json \
 ## ファイル転送の規約（出向: agent → Slack）
 
 転送したいファイルは **本文へのパス記述ではなく、outbox へ置く**ことで確定転送される。
-Claude・Pi いずれの backend でも同じ契約（後端の差分なし）。
+backend（Claude / Pi / Hermes / Copilot）いずれも**契約文そのものは同一**
+（`index.ts` の `buildSystemPrompt`）で、agent への**渡し方（載体 carrier）だけが異なる**。
 
 - **outbox**: `<work_dir>/.iris/outbox/`（受信インボックス `attachments/` とは別ディレクトリ）。
 - 転送は **この outbox の現存ファイルだけ**を転送し、転送後に削除する（一時キュー）。
 - 返信本文に絶対パスを書いても、ファイルの中身を貼り付けても転送されない
   （旧来の「本文からパス拾い」ヒューリスティックは廃止。#79 で根治）。
-- この規約は agent へ `--append-system-prompt`（`src/index.ts` の `buildSystemPrompt`）で
-  周知されるので、設定は不要。
+- **載体（設定は不要。いずれも書込み失敗は非致命で `stderr` に出る）**:
+  - Claude — 起動旗 `--append-system-prompt`
+  - Hermes — `HERMES_HOME`（`~/.iris-slack/hermes-home/<session>/SOUL.md`）
+  - Copilot — `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`（`~/.iris-slack/copilot-instructions/
+    <session>/iris-outbox.instructions.md`）。`.instructions.md` 接尾辞が必須で
+    `applyTo` を付けない；`AGENTS.md` にすると「パス一覧」扱いになり読まれない
+  - Pi — rpc 起動時のオプション（`backends/pi.ts` 参照）
 
 ## セキュリティ方針（内製の主目的）
 
@@ -167,6 +173,7 @@ Claude・Pi いずれの backend でも同じ契約（後端の差分なし）�
 2. **権限の既定は手動承認**: `auto` は明示的に opt-in したときのみ。
 3. **外向き転送は outbox 限定**: cron / relay / provider 切替 / 汎用リレーなどは未実装。出方向の唯一の転送は「ファイルの outbox 転送」で、本文走査ではなく `<work_dir>/.iris/outbox/` の現存ファイルを転送して削除する（下段を参照）。攻撃面は「Slack 受信 → agent CLI 実行 → outbox 転送」のみ。
    - **outbox の脅威モデル境界（既知・受容）**: outbox は **ホストローカル・単一ユーザ前提**の転送機構。outbox 内のファイルは `0644` で書かれるため、同一ホストの**他サービス/他ユーザ**は投入・改変・削除により転送を偽装可能。複数ユーザ/非信頼サービスが同居するホストでは outbox ディレクトリを `0700` にし、他プロセスの書き込みを遮断する（運用上の推奨、コードでは未対応）。また outbox 内の **symlink は現在検査していない**（外部パスへの転向になり得る）。いずれも本ツールの脅威モデル（単一ユーザ）では実害は小さいため受け入れ、将来の強化作業（`lstat` で symlink 弾き・`realpath` 閉域チェック・ディレクトリ権限 `0700` 化）に残す。
+   - **載体ファイルに Slack 会話が残る**: `/switch` の文脈引き継ぎを挟んだ session では、載体ファイル（Copilot の instructions / Hermes の SOUL.md）に**ユーザー自身の Slack 発言文**が書き込まれる（`slack/thread-history.ts` の `renderCarryOver`）。Copilot のものは `0600` で書く。載体を user repository の内側（`AGENTS.md` や `.github/`）に置かないのはこのためで、`git add .` で公的リポジトリに会話を漏らす事故を防ぐ。
 4. **設定は TOML 一本**（`iris.config.toml` / `~/.iris-slack/config.toml`、トークン込み）。コードやリポジトリに秘密を置かない（`iris.config.toml` は gitignore、`iris.config.example.toml` はプレースホルダのみ）。`.env` は使わない。
 
 ## ビルド・テスト・lint
