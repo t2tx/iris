@@ -18,12 +18,17 @@ pnpm install       #  初回。prepare フックで lefthook も入る
 ## 品質ゲート
 
 ```bash
-pnpm verify       # typecheck → check → test（push 前にこれが通ること）
+pnpm verify       # typecheck → check → lint:complexity → test（push 前にこれが通ること）
 pnpm test         # 単体テスト（vitest）
 pnpm test:coverage # カバレッジ（v8 / coverage/ に出力）
-pnpm lint         # biome + 複雑度チェック
-pnpm check:fix    # biome --write
+pnpm check        # biome の lint + format（`biome.json` が設定の実体）
+pnpm lint:complexity # ディレクトリ内ファイル数チェック
+pnpm check:fix    # biome check --write（vcs.useIgnoreFile で ignore 済みは触らない）
 ```
+
+- `pnpm check` が実際に失敗させるのは **整形** と **import 整列（organizeImports）** の 2 つだけ。
+  lint の warning / info は exit code を汚さないため、通ってしまいます（設定の例外と残存件数は
+  `AGENTS.md` の「Biome 設定の設計判断」と `src/lint-config.test.ts` を参照）。
 
 - `pre-push` で `pnpm verify` が自動実行されます（lefthook）。
 - GitHub Actions でも push / PR 時に verify + coverage を実行します。

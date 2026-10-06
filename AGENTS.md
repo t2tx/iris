@@ -70,7 +70,7 @@ iris/
 ├── package.json              # パッケージ定義・スクリプト
 ├── tsconfig.json             # TypeScript 設定
 ├── tsconfig.build.json       # ビルド用 TS 設定
-├── biome.json                # Biome lint + format 設定
+├── biome.json                # Biome lint + format 設定（strict JSON・コメント不可）
 ├── lefthook.yml              # git hooks (pre-commit / pre-push)
 ├── iris.config.example.toml  # 設定テンプレート（プレースホルダ）
 ├── src/
@@ -193,13 +193,45 @@ backend（Claude / Pi / Hermes / Copilot）いずれも**契約文そのもの�
 ### コードスタイル
 
 - TypeScript / ESM（`type: module`）。Node 22（`.node-version` で 22.18.0 に固定）。
-- Biome（`biome.json`）で lint + format を一元管理。`quoteStyle: single` / `trailingCommas: all` / `bracketSpacing: false`。複雑度（ディレクトリファイル数）は `scripts/check-complexity.sh` が補完。
+- Biome（`biome.json`）で lint + format を一元管理。**実効値は `biome.json` にピン留め**（`indentStyle: tab` / `lineWidth: 80` / `quoteStyle: double` / `bracketSpacing: true` / `trailingCommas: all`）。複雑度（ディレクトリファイル数）は `scripts/check-complexity.sh` が補完。
 - 型付きルール（元 `typescript-eslint` の `no-floating-promises` / `no-unsafe-argument`）は Biome が持たないため `typecheck`(`tsc --noEmit`, `noUncheckedIndexedAccess` 等) でカバー。
 - パッケージマネージャは **pnpm**。
 
+#### Biome 設定の設計判断（`biome.json`）
+
+- **`biome.json` は strict JSON（コメント不可）**。JSONC が通るのは `biome.jsonc` のみ。
+  構文エラーを含む `biome.json` は **Biome が無言で破棄し、既定値で exit 0**（警告も
+  設定ファイルへの言及も出ない）。「設定したつもり」が CI にもログにも出ない事故なので、
+  ガードを `src/lint-config.test.ts` においてある（設定値の契約テスト。壊すと test ゲートが落ちる）。
+  ※ 不明キーや廃止済み `rules.recommended: true` のような*スキーマ*エラーは exit 1 で失敗する。
+  無言になるのは構文エラーだけ。
+- **ピン留めしている整形値**（いずれも「変更前に Biome が出力していた形」なので再整形 diff はゼロ、
+  `biome check .` で 64 ファイルすべて format error なし）: `indentStyle: tab` / `lineWidth: 80` /
+  `quoteStyle: double` / `bracketSpacing: true` / `trailingCommas: all`。
+  ※ `json.formatter` だけ `space` + `indentWidth: 2` に別ピン。ルートの `tab` をそのまま適用すると
+  `package.json` / `tsconfig*.json` / `sea-config.json` がタブ文字に書き換わろうとする（`pnpm check`
+  は `src/` しか見ないので今までは顕在化していなかった）。
+- **`vcs.useIgnoreFile: true`** で `.gitignore` を Biome にも適用。`pnpm check:fix` が
+  `iris.config.toml`（トークン）や `dist/` / `coverage/` を触らない。副作用として、ignore ファイルが
+  存在しないディレクトリでは Biome が exit 1 で失敗する（git 外に設定を持ち出したとき）。
+- **ゲートが実際に利くのは 2 つだけ**: 整形（format）と `organizeImports`（assist、error レベル）。
+  lint の warning / info は exit code を汚さないため `pnpm check` を通してしまう。現行の残存分は
+  warning 13 件・info 10 件（`useOptionalChain` 5、`noNonNullAssertion` 3、`noUnusedFunctionParameters` 3、
+  `noUnusedPrivateClassMembers` 1、`noGlobalIsNan` 1、`useTemplate` 9、`noUselessSwitchCase` 1）。
+  これらを 0 に片付けてから severity 格上げを議論する（refactor PR として別扱い）。
+- **意図的な例外 2 件**（理由を `src/lint-config.test.ts` にコメントで記録）:
+  1. `complexity.useLiteralKeys: off` — wire payload の field 読みを `raw["type"]` / `msg["method"]`
+     の bracket 表記で書くのを許容（src 全体で **115 箇所**：wire parser の protocol.ts 28 /
+     copilot-protocol.ts 18 / hermes-protocol.ts 16、ACP session 層の hermes.ts 18 /
+     copilot-sessions.ts 8 / copilot.ts 4、format.ts 13、他 10）。wire の field 名を文字列のまま
+     残して AGENTS.md のプロトコル表から grep しやすいようにする設計判断。
+  2. `style.noNonNullAssertion: off`（`src/**/*.test.ts` の override のみ）— fixture の 1 要素を
+     `events[0]!` と取るのが assertion の定型で、`noUncheckedIndexedAccess` と組むとガードが
+     必要になる（39 箇所）。**非テストの src/ では従来どおり warning が残る**。
+
 ### テスト
 
-- **vitest**。`*.test.ts` を `src/` に配置（`import {expect, test, describe, it} from 'vitest'`）。
+- **vitest**。`*.test.ts` を `src/` に配置（`import { describe, expect, test } from "vitest"`）。
 - 純粋ロジック（protocol / format / permission）を中心にテスト。
 - IO を持つ層（spawn / Bolt）は単体テストしない。ロジックは `protocol.ts` のように純粋関数へ切り出してテストする。
 
