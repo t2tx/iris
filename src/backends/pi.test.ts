@@ -979,3 +979,168 @@ printf '%s\\n' '${JSON.stringify({
 		mgr.closeAll();
 	});
 });
+
+// ── Outbox contract injection ────────────────────────────────────────────────
+
+/**
+ * The outbox contract text is multi-line and multi-word, so the space-joined
+ * `"$*"` argv log used above is the wrong shape here: it erases argument
+ * boundaries. These tests log argv NUL-separated (one record per argument),
+ * which pins the property that actually matters — the contract reaches Pi as a
+ * SINGLE argument directly after its flag, so pi's resource loader resolves it
+ * as text (resolvePromptInput only reads a file when the WHOLE value is an
+ * existing path) and appends it verbatim to the system prompt.
+ */
+describe("PiProcess outbox contract injection", () => {
+	const CONTRACT = [
+		"You are running inside Iris, a bridge to Slack.",
+		"To send a file to the user, write it as a regular file in this directory: /work/proj/.iris/outbox/1712345678.123456",
+		"Iris uploads every file it finds there to Slack and deletes it after uploading.",
+	].join("\n");
+
+	/** Fake pi: appends each spawn's argv as NUL-separated records. */
+	function fakePiRecordingArgv(logPath: string, sessionId: string): string {
+		const dir = mkdtempSync(join(tmpdir(), "iris-fakepi-argv-"));
+		const path = join(dir, "fake-pi.sh");
+		const resp = JSON.stringify({
+			type: "response",
+			command: "get_state",
+			success: true,
+			data: { sessionId },
+		});
+		writeFileSync(
+			path,
+			[
+				"#!/bin/sh",
+				`for a in "$@"; do printf '%s\\0' "$a" >> "${logPath}"; done`,
+				`printf 'SPAWN-END\\0' >> "${logPath}"`,
+				`printf '%s\\n' '${resp}'`,
+				"exec cat >/dev/null",
+			].join("\n"),
+		);
+		chmodSync(path, 0o755);
+		return path;
+	}
+
+	/** Parse the NUL log into one argv array per spawn. */
+	function spawnArgvs(logPath: string): string[][] {
+		const records = readFileSync(logPath, "utf8").split("\0");
+		const argvs: string[][] = [];
+		let current: string[] = [];
+		for (const r of records) {
+			if (r === "SPAWN-END") {
+				if (current.length > 0) argvs.push(current);
+				current = [];
+			} else if (r !== "") {
+				current.push(r);
+			}
+		}
+		return argvs.filter((a) => a.includes("--mode"));
+	}
+
+	test("appendSystemPrompt rides argv as one exact argument after its flag", async () => {
+		const argvPath = join(
+			mkdtempSync(join(tmpdir(), "iris-argv-")),
+			"argv.log",
+		);
+		const bin = fakePiRecordingArgv(argvPath, "contract-sess");
+		const mgr = new SessionManager({
+			bin,
+			workDir: process.cwd(),
+			mode: "auto",
+			appendSystemPrompt: CONTRACT,
+			createProcess: (o, m) => new PiProcess(o, m),
+		});
+
+		mgr.send("t1", "hi", noopHandlers);
+		expect(
+			await waitFor(
+				() => mgr.getSessionInfo("t1")?.sessionId === "contract-sess",
+			),
+		).toBe(true);
+
+		const argvs = spawnArgvs(argvPath);
+		expect(argvs.length).toBeGreaterThanOrEqual(1);
+		const argv = argvs[0]!;
+		const i = argv.indexOf("--append-system-prompt");
+		expect(i).toBeGreaterThanOrEqual(0);
+		// The value must be exactly one argument — no word-splitting, no
+		// truncation at the first newline, and NOT split across two flags.
+		expect(argv[i + 1]).toBe(CONTRACT);
+		expect(argv.filter((a) => a === "--append-system-prompt")).toHaveLength(1);
+		// The outbox path inside the contract survives intact.
+		expect(argv[i + 1]).toContain("/.iris/outbox/1712345678.123456");
+
+		mgr.closeAll();
+	});
+
+	test("the contract is injected on respawn too (resume path keeps the flag)", async () => {
+		const argvPath = join(
+			mkdtempSync(join(tmpdir(), "iris-argv-")),
+			"argv.log",
+		);
+		const bin = fakePiRecordingArgv(argvPath, "resume-sess");
+		const mgr = new SessionManager({
+			bin,
+			workDir: process.cwd(),
+			mode: "auto",
+			appendSystemPrompt: CONTRACT,
+			createProcess: (o, m) => new PiProcess(o, m),
+		});
+
+		mgr.send("t1", "hi", noopHandlers);
+		expect(
+			await waitFor(
+				() => mgr.getSessionInfo("t1")?.sessionId === "resume-sess",
+			),
+		).toBe(true);
+		expect(mgr.killSession("t1")).toBe(true);
+		// Respawn only happens once the dead process is observed as dead — send
+		// to a still-flagged-alive entry would reuse it (correct behavior, see
+		// session-dir isolation test above). Wait for the exit like that test does.
+		expect(
+			await waitFor(() => mgr.getSessionInfo("t1")?.alive === false),
+			"killSession should surface as alive=false",
+		).toBe(true);
+		mgr.send("t1", "again", noopHandlers);
+		expect(
+			await waitFor(() => spawnArgvs(argvPath).length >= 2),
+			"respawn should have happened",
+		).toBe(true);
+
+		for (const argv of spawnArgvs(argvPath)) {
+			const i = argv.indexOf("--append-system-prompt");
+			expect(i, "every spawn carries the contract").toBeGreaterThanOrEqual(0);
+			expect(argv[i + 1]).toBe(CONTRACT);
+		}
+
+		mgr.closeAll();
+	});
+
+	test("no contract to inject → the flag is absent (nothing invented)", async () => {
+		const argvPath = join(
+			mkdtempSync(join(tmpdir(), "iris-argv-")),
+			"argv.log",
+		);
+		const bin = fakePiRecordingArgv(argvPath, "silent-sess");
+		const mgr = new SessionManager({
+			bin,
+			workDir: process.cwd(),
+			mode: "auto",
+			createProcess: (o, m) => new PiProcess(o, m),
+		});
+
+		mgr.send("t1", "hi", noopHandlers);
+		expect(
+			await waitFor(
+				() => mgr.getSessionInfo("t1")?.sessionId === "silent-sess",
+			),
+		).toBe(true);
+
+		for (const argv of spawnArgvs(argvPath)) {
+			expect(argv).not.toContain("--append-system-prompt");
+		}
+
+		mgr.closeAll();
+	});
+});
