@@ -13,8 +13,10 @@
 # テーブル見出しより「前」に書く必要があります（後ろに書くとそのテーブルの
 # 中のキーと解釈され、効きません）。
 claude_bin = "claude"          # claude CLI のパス（PATH にあれば claude のままで可）
-# agent = "claude"            # claude | pi（既定 claude、各プロジェクトで上書き可）
+# agent = "claude"            # claude | pi | hermes | copilot（既定 claude、各プロジェクトで上書き可）
 # pi_bin = "pi"                # Pi CLI のパス（PATH にあれば pi のままで可、agent = "pi" のとき使用）
+# hermes_bin = "hermes"        # Hermes CLI のパス（agent = "hermes" のとき使用）
+# copilot_bin = "copilot"      # GitHub Copilot CLI のパス（agent = "copilot" のとき使用）
 permission_mode = "manual"     # manual（毎回確認）| acceptEdits | auto（全自動）
 log_level = "info"             # debug | info | warn | error（既定 info）
 # bash_progress_max = 800      # 進捗表示の Bash コマンドの最大文字数（既定 800、正の整数）
@@ -42,13 +44,16 @@ allow_users = ["U09XXXXXXX"]       # このユーザーからの DM
 # allow_users = ["U09XXXXXXX"]
 # permission_mode = "acceptEdits"  # 編集系は自動許可（個別上書き）
 # agent = "pi"                  # pi を使う場合は pi（デフォルトは claude）
+# agent = "copilot"             # Copilot CLI。なお manual ではツールが実行できず
+#                               # outbox 転送も不可（起動時ゲートのみ・#99）。acceptEdits/auto を使う
 
 # ── ファイルの転送（agent → Slack）について ──────────────────────────────
 # 出方向の転送は「返信本文から絶対パスを拾う」ヒューリスティックではなく、
-# 明示的な outbox 契約で統一している（Claude・Pi 双方、後端の差分なし）。
-# 転送したいファイルは <work_dir>/.iris/outbox/ に置くだけでよい:
+# 明示的な outbox 契約で統一している（claude / pi / hermes / copilot の 4 backend
+# 共通、後端の差分なし）。転送したいファイルは <work_dir>/.iris/outbox/ に置くだけでよい:
 #   ・Iris は outbox 配下の現存ファイルを全部転送し、転送後削除する（一時キュー）。
 #   ・受信インボックス <work_dir>/.iris/attachments/ とは別ディレクトリで衝突しない。
 # 本文にパスを書く・中身を貼り付けても転送されない。転送の唯一の経路は outbox である。
-# （この指示は agent への --append-system-prompt で周知されるため設定は不要。
-#  理解のためだけなら、このコメントと AGENTS.md を参照のこと。）
+# （agent への周知は backend ごとの carrier で注入されるため設定は不要:
+#  claude/pi は --append-system-prompt、copilot は ~/.iris-slack の instructions
+#  ディレクトリ、hermes は HERMES_HOME の SOUL.md。詳細は AGENTS.md。）
